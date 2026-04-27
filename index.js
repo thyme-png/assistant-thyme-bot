@@ -104,6 +104,32 @@ async function askMiMo(chatId, userMessage) {
   return reply;
 }
 
+async function reformatForBf(raw) {
+  try {
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "xiaomi/mimo-v2-pro",
+        messages: [
+          {
+            role: "system",
+            content: "You are helping someone message their boyfriend Patrick. Rewrite the message to sound natural, warm, and like the sender. Keep the tone casual. Output ONLY the rewritten message — no quotes, no explanation.",
+          },
+          { role: "user", content: raw },
+        ],
+      }),
+    });
+    const data = await res.json();
+    return data.choices?.[0]?.message?.content?.trim() || raw;
+  } catch {
+    return raw;
+  }
+}
+
 app.post("/webhook", async (req, res) => {
   res.sendStatus(200);
 
@@ -201,43 +227,63 @@ app.post("/webhook", async (req, res) => {
 
   // /bf <message> — shortcut to message patrick-nmkr-io
   if (text.startsWith("/bf ")) {
-    const messageText = text.slice(4).trim();
-    if (!messageText) {
+    const raw = text.slice(4).trim();
+    if (!raw) {
       await sendTelegram(chatId, "Usage: `/bf <your message>`");
       return;
     }
-    pendingConfirm.set(chatId, { type: "bf", messageText });
+    await sendTyping(chatId);
+    const formatted = await reformatForBf(raw);
+    pendingConfirm.set(chatId, { type: "bf_confirm", formatted });
     await sendTelegram(chatId,
-      `💌 Send this to Patrick?\n\n_"${messageText}"_\n\nReply *yes* to send or *no* to cancel.`
+      `💌 Here's your message to Patrick:\n\n_"${formatted}"_\n\n` +
+      `Reply *send*, *edit*, or *cancel*.`
     );
     return;
   }
 
-  // Confirmation handler (yes/no)
+  // /bf confirmation flow
   if (pendingConfirm.has(chatId)) {
-    const answer = text.toLowerCase();
-    if (answer === "yes" || answer === "y") {
-      const pending = pendingConfirm.get(chatId);
-      pendingConfirm.delete(chatId);
-      await sendTyping(chatId);
-      try {
-        const threadResult = await cli("thread", "start",
-          "--agent", AGENT_SLUG,
-          "--recipient", BF_SLUG,
-          "--message", pending.messageText
-        );
-        const threadId = threadResult.data?.threadId;
-        await sendTelegram(chatId, `✅ Sent to Patrick${threadId ? ` (thread #${threadId})` : ""}!`);
-      } catch (err) {
-        await sendTelegram(chatId, `⚠️ Failed to send: ${err.message}`);
+    const pending = pendingConfirm.get(chatId);
+    const answer = text.toLowerCase().trim();
+
+    if (pending.type === "bf_confirm") {
+      if (answer === "send" || answer === "yes") {
+        pendingConfirm.delete(chatId);
+        await sendTyping(chatId);
+        try {
+          const threadResult = await cli("thread", "start",
+            "--agent", AGENT_SLUG,
+            "--recipient", BF_SLUG,
+            "--message", pending.formatted
+          );
+          const threadId = threadResult.data?.threadId;
+          await sendTelegram(chatId, `✅ Sent to Patrick${threadId ? ` (thread #${threadId})` : ""}! 💌`);
+        } catch (err) {
+          await sendTelegram(chatId, `⚠️ Failed to send: ${err.message}`);
+        }
+      } else if (answer === "edit") {
+        pendingConfirm.set(chatId, { type: "bf_editing" });
+        await sendTelegram(chatId, "✏️ Type your edited message:");
+      } else if (answer === "cancel" || answer === "no") {
+        pendingConfirm.delete(chatId);
+        await sendTelegram(chatId, "❌ Cancelled.");
+      } else {
+        await sendTelegram(chatId, "Reply *send*, *edit*, or *cancel*.");
       }
-    } else if (answer === "no" || answer === "n" || answer === "cancel") {
-      pendingConfirm.delete(chatId);
-      await sendTelegram(chatId, "❌ Cancelled.");
-    } else {
-      await sendTelegram(chatId, "Reply *yes* to send or *no* to cancel.");
+      return;
     }
-    return;
+
+    if (pending.type === "bf_editing") {
+      await sendTyping(chatId);
+      const formatted = await reformatForBf(text);
+      pendingConfirm.set(chatId, { type: "bf_confirm", formatted });
+      await sendTelegram(chatId,
+        `💌 Here's your updated message:\n\n_"${formatted}"_\n\n` +
+        `Reply *send*, *edit*, or *cancel*.`
+      );
+      return;
+    }
   }
 
   // /msg <slug> <message>
