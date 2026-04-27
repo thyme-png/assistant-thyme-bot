@@ -23,13 +23,14 @@ Answer directly and concisely unless a detailed explanation is needed.
 Be honest when you're unsure rather than guessing.`;
 
 const histories = new Map();
-const pendingConfirm = new Map(); // chatId → { type, ...data }
 
-// Restore masumi session from env var on startup
+// state per chat: { type: "bf_awaiting" | "bf_confirm" | "bf_confirm_reformatted", message?, reformatted? }
+const state = new Map();
+
 async function restoreMasumiSession() {
   if (!MASUMI_BACKUP_B64) {
-    console.log("No MASUMI_BACKUP_B64 env var — agent messaging disabled.");
-    return false;
+    console.log("No MASUMI_BACKUP_B64 — agent messaging disabled.");
+    return;
   }
   try {
     const json = Buffer.from(MASUMI_BACKUP_B64, "base64").toString("utf8");
@@ -41,10 +42,8 @@ async function restoreMasumiSession() {
       "--json",
     ]);
     console.log("Masumi session restored.");
-    return true;
   } catch (err) {
     console.error("Failed to restore masumi session:", err.message);
-    return false;
   }
 }
 
@@ -117,7 +116,7 @@ async function reformatForBf(raw) {
         messages: [
           {
             role: "system",
-            content: "You are helping someone message their boyfriend Patrick. Rewrite the message to sound natural, warm, and like the sender. Keep the tone casual. Output ONLY the rewritten message — no quotes, no explanation.",
+            content: "You are helping someone write a message to their boyfriend Patrick. Rewrite the message to sound natural, warm, and like the sender. Keep the tone casual. Output ONLY the rewritten message — no quotes, no explanation.",
           },
           { role: "user", content: raw },
         ],
@@ -130,34 +129,52 @@ async function reformatForBf(raw) {
   }
 }
 
-async function sendPendingBfMessage(chatId) {
-  const pending = pendingConfirm.get(chatId);
-  if (!pending || pending.type !== "bf_confirm") return;
-  pendingConfirm.delete(chatId);
+function wantsToMessageBf(text) {
+  const t = text.toLowerCase();
+  return (
+    /\b(message|msg|send|text|tell|write)\b/.test(t) &&
+    /\b(bf|boyfriend|patrick)\b/.test(t)
+  ) || t === "/bf";
+}
+
+async function sendMessageToPatrick(chatId, message) {
+  state.delete(chatId);
   await sendTyping(chatId);
   try {
-    const threadResult = await cli("thread", "start",
+    const result = await cli("thread", "start",
       "--agent", AGENT_SLUG,
       "--recipient", BF_SLUG,
-      "--message", pending.formatted
+      "--message", message
     );
-    const threadId = threadResult.data?.threadId;
+    const threadId = result.data?.threadId;
     await sendTelegram(chatId, `✅ Sent to Patrick${threadId ? ` (thread #${threadId})` : ""}! 💌`);
   } catch (err) {
     await sendTelegram(chatId, `⚠️ Failed to send: ${err.message}`);
   }
 }
 
+async function showBfConfirm(chatId, message) {
+  state.set(chatId, { type: "bf_confirm", message });
+  await sendTelegram(chatId,
+    `💌 Ready to send to Patrick:\n\n"${message}"\n\n` +
+    `Reply *send*, *clean it up*, or *cancel*.`
+  );
+}
+
 app.post("/webhook", async (req, res) => {
   res.sendStatus(200);
 
-  // Handle emoji reactions — ✅ means "send"
+  // ✅ emoji reaction = send
   const reaction = req.body?.message_reaction;
   if (reaction) {
     const chatId = String(reaction.chat?.id);
     const isCheckmark = reaction.new_reaction?.some(r => r.type === "emoji" && r.emoji === "✅");
-    if (isCheckmark && pendingConfirm.has(chatId)) {
-      await sendPendingBfMessage(chatId);
+    const s = state.get(chatId);
+    if (isCheckmark && s?.type === "bf_confirm") {
+      await sendMessageToPatrick(chatId, s.message);
+    }
+    if (isCheckmark && s?.type === "bf_confirm_reformatted") {
+      await sendMessageToPatrick(chatId, s.reformatted);
     }
     return;
   }
@@ -173,30 +190,77 @@ app.post("/webhook", async (req, res) => {
     return;
   }
 
+  // Handle active state first
+  const s = state.get(chatId);
+  if (s) {
+    const answer = text.toLowerCase().trim();
+
+    // Waiting for the message to send
+    if (s.type === "bf_awaiting") {
+      await showBfConfirm(chatId, text);
+      return;
+    }
+
+    // Showing message as-is, waiting for send / clean it up / cancel
+    if (s.type === "bf_confirm") {
+      if (answer === "send" || answer === "yes" || answer === "send it") {
+        await sendMessageToPatrick(chatId, s.message);
+      } else if (/clean|reformat|fix|rewrite|change/.test(answer)) {
+        await sendTyping(chatId);
+        const reformatted = await reformatForBf(s.message);
+        state.set(chatId, { type: "bf_confirm_reformatted", message: s.message, reformatted });
+        await sendTelegram(chatId,
+          `✨ Here's a cleaned-up version:\n\n"${reformatted}"\n\n` +
+          `Reply *send this*, *keep original*, or *cancel*.`
+        );
+      } else if (answer === "cancel" || answer === "no") {
+        state.delete(chatId);
+        await sendTelegram(chatId, "❌ Cancelled.");
+      } else {
+        await sendTelegram(chatId, `Reply *send*, *clean it up*, or *cancel*.`);
+      }
+      return;
+    }
+
+    // Showing reformatted version
+    if (s.type === "bf_confirm_reformatted") {
+      if (/send this|send|yes/.test(answer)) {
+        await sendMessageToPatrick(chatId, s.reformatted);
+      } else if (/keep|original|mine/.test(answer)) {
+        await sendMessageToPatrick(chatId, s.message);
+      } else if (answer === "cancel" || answer === "no") {
+        state.delete(chatId);
+        await sendTelegram(chatId, "❌ Cancelled.");
+      } else {
+        await sendTelegram(chatId, `Reply *send this*, *keep original*, or *cancel*.`);
+      }
+      return;
+    }
+  }
+
   // /start
   if (text === "/start") {
     await sendTelegram(chatId,
-      "👋 Hi! I'm your personal assistant powered by MiMo V2 Pro.\n\n" +
-      "*Commands:*\n" +
-      "/bf `<message>` — message Patrick 💌\n" +
+      "👋 Hi! I'm your personal assistant.\n\n" +
+      "Just talk to me naturally — say things like:\n" +
+      "• \"send a message to my bf\"\n" +
+      "• \"check my inbox\"\n\n" +
+      "*Slash commands:*\n" +
       "/inbox — check new messages\n" +
-      "/reply `<thread-id> <message>` — reply to a message\n" +
-      "/msg `<agent-slug> <message>` — message any agent\n" +
+      "/reply `<thread-id> <message>` — reply to a thread\n" +
       "/contacts — browse agents\n" +
-      "/clear — reset conversation\n\n" +
-      "Or just chat with me!"
+      "/clear — reset conversation"
     );
     return;
   }
 
-  // /clear
   if (text === "/clear") {
     histories.delete(chatId);
+    state.delete(chatId);
     await sendTelegram(chatId, "🧹 Conversation cleared.");
     return;
   }
 
-  // /inbox
   if (text === "/inbox") {
     await sendTyping(chatId);
     try {
@@ -210,10 +274,7 @@ app.post("/webhook", async (req, res) => {
           const sender = m.sender?.displayName || m.sender?.slug || "Unknown";
           const threadId = m.threadId ?? m.thread_id;
           await sendTelegram(chatId,
-            `*From:* ${sender}\n` +
-            `*Thread ID:* \`${threadId}\`\n\n` +
-            `${m.text}\n\n` +
-            `↩️ Reply: /reply ${threadId} <your message>`
+            `*From:* ${sender}\n*Thread ID:* \`${threadId}\`\n\n${m.text}\n\n↩️ /reply ${threadId} <message>`
           );
           await cli("thread", "read", String(threadId), "--agent", AGENT_SLUG).catch(() => {});
         }
@@ -224,139 +285,51 @@ app.post("/webhook", async (req, res) => {
     return;
   }
 
-  // /contacts
   if (text === "/contacts" || text.startsWith("/contacts ")) {
     await sendTyping(chatId);
-    const query = text.slice("/contacts".length).trim() || "";
+    const query = text.slice("/contacts".length).trim();
     try {
-      const args = query
-        ? ["discover", "--query", query]
-        : ["agents", "list"];
-      const result = await cli(...args);
+      const result = await cli(...(query ? ["discover", "--query", query] : ["agents", "list"]));
       const agents = result.data?.agents ?? [];
       if (agents.length === 0) {
-        await sendTelegram(chatId, "No agents found. Try `/contacts <name>` to search.");
+        await sendTelegram(chatId, "No agents found.");
         return;
       }
-      const lines = agents.slice(0, 20).map(a => {
-        const slug = a.slug || a.id;
-        const name = a.displayName || a.name || slug;
-        return `• *${name}* — \`${slug}\``;
-      });
-      if (agents.length > 20) lines.push(`_…and ${agents.length - 20} more. Try /contacts <name> to search._`);
-      await sendTelegram(chatId,
-        `*Agents you can message:*\n\n${lines.join("\n")}\n\n` +
-        `Send a message: /msg <slug> <text>`
-      );
+      const lines = agents.slice(0, 20).map(a => `• ${a.displayName || a.name || a.slug} — \`${a.slug}\``);
+      await sendTelegram(chatId, `*Agents:*\n\n${lines.join("\n")}`);
     } catch (err) {
       await sendTelegram(chatId, `⚠️ Could not load contacts: ${err.message}`);
     }
     return;
   }
 
-  // /bf <message> — shortcut to message patrick-nmkr-io
-  if (text.startsWith("/bf ")) {
-    const raw = text.slice(4).trim();
-    if (!raw) {
-      await sendTelegram(chatId, "Usage: `/bf <your message>`");
-      return;
-    }
-    await sendTyping(chatId);
-    const formatted = await reformatForBf(raw);
-    pendingConfirm.set(chatId, { type: "bf_confirm", formatted });
-    await sendTelegram(chatId,
-      `💌 Here's your message to Patrick:\n\n_"${formatted}"_\n\n` +
-      `Reply *send*, *edit*, or *cancel*.`
-    );
-    return;
-  }
-
-  // /bf confirmation flow
-  if (pendingConfirm.has(chatId)) {
-    const pending = pendingConfirm.get(chatId);
-    const answer = text.toLowerCase().trim();
-
-    if (pending.type === "bf_confirm") {
-      if (answer === "send" || answer === "yes") {
-        await sendPendingBfMessage(chatId);
-      } else if (answer === "edit") {
-        pendingConfirm.set(chatId, { type: "bf_editing" });
-        await sendTelegram(chatId, "✏️ Type your edited message:");
-      } else if (answer === "cancel" || answer === "no") {
-        pendingConfirm.delete(chatId);
-        await sendTelegram(chatId, "❌ Cancelled.");
-      } else {
-        await sendTelegram(chatId, "Reply *send*, *edit*, or *cancel*.");
-      }
-      return;
-    }
-
-    if (pending.type === "bf_editing") {
-      await sendTyping(chatId);
-      const formatted = await reformatForBf(text);
-      pendingConfirm.set(chatId, { type: "bf_confirm", formatted });
-      await sendTelegram(chatId,
-        `💌 Here's your updated message:\n\n_"${formatted}"_\n\n` +
-        `Reply *send*, *edit*, or *cancel*.`
-      );
-      return;
-    }
-  }
-
-  // /msg <slug> <message>
-  if (text.startsWith("/msg ")) {
-    const parts = text.slice(5).trim().split(" ");
-    if (parts.length < 2) {
-      await sendTelegram(chatId, "Usage: `/msg <agent-slug> <your message>`");
-      return;
-    }
-    const targetSlug = parts[0];
-    const messageText = parts.slice(1).join(" ");
-
-    await sendTyping(chatId);
-    try {
-      // First discover the agent to get their ID
-      const discovered = await cli("discover", "--query", targetSlug);
-      const agents = discovered.data?.agents ?? [];
-      const target = agents.find(a => a.slug === targetSlug || a.slug?.includes(targetSlug));
-      if (!target) {
-        await sendTelegram(chatId, `❌ Agent \`${targetSlug}\` not found. Check the slug and try again.`);
-        return;
-      }
-
-      const threadResult = await cli("thread", "start",
-        "--agent", AGENT_SLUG,
-        "--recipient", target.slug,
-        "--message", messageText
-      );
-      const threadId = threadResult.data?.threadId;
-      await sendTelegram(chatId, `✅ Message sent to *${target.slug}*${threadId ? ` (thread #${threadId})` : ""}.`);
-    } catch (err) {
-      await sendTelegram(chatId, `⚠️ Failed to send message: ${err.message}`);
-    }
-    return;
-  }
-
-  // /reply <threadId> <message>
   if (text.startsWith("/reply ")) {
     const parts = text.slice(7).trim().split(" ");
     if (parts.length < 2) {
-      await sendTelegram(chatId, "Usage: `/reply <thread-id> <your message>`");
+      await sendTelegram(chatId, "Usage: `/reply <thread-id> <message>`");
       return;
     }
     const threadId = parts[0];
-    const messageText = parts.slice(1).join(" ");
-
+    const message = parts.slice(1).join(" ");
     await sendTyping(chatId);
     try {
-      await cli("thread", "reply",
-        "--agent", AGENT_SLUG,
-        "--thread", threadId,
-        "--message", messageText
-      );
-      await sendTelegram(chatId, `✅ Reply sent to thread #${threadId}.`);
+      await cli("thread", "reply", "--agent", AGENT_SLUG, "--thread", threadId, "--message", message);
+      await sendTelegram(chatId, `✅ Reply sent!`);
     } catch (err) {
       await sendTelegram(chatId, `⚠️ Failed to reply: ${err.message}`);
+    }
+    return;
+  }
+
+  // Natural language: wants to message bf
+  if (wantsToMessageBf(text)) {
+    // If they included the message inline e.g. "send this to my bf: hey love you"
+    const colonSplit = text.match(/[:—]\s*(.+)$/s);
+    if (colonSplit) {
+      await showBfConfirm(chatId, colonSplit[1].trim());
+    } else {
+      state.set(chatId, { type: "bf_awaiting" });
+      await sendTelegram(chatId, "💌 What do you want to say to Patrick?");
     }
     return;
   }
