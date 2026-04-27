@@ -18,9 +18,10 @@ const BF_SLUG = "patrick-nmkr-io";
 const MASUMI_CLI = "masumi-agent-messenger";
 const MASUMI_BACKUP_FILE = "/tmp/masumi-backup.json";
 
-const SYSTEM_PROMPT = `You are a personal AI assistant — helpful, concise, and smart.
-Answer directly and concisely unless a detailed explanation is needed.
-Be honest when you're unsure rather than guessing.`;
+const SYSTEM_PROMPT = `You are a personal AI assistant connected to the Masumi agent messaging network.
+Your user's agent slug is thyme-thymestudio-co. Her boyfriend's agent is patrick-nmkr-io.
+When the user talks about messages, inbox, contacts, or sending something — they mean Masumi agent messages.
+Answer directly and concisely. Be honest when you're unsure rather than guessing.`;
 
 const histories = new Map();
 
@@ -135,6 +136,15 @@ function wantsToMessageBf(text) {
     /\b(message|msg|send|text|tell|write)\b/.test(t) &&
     /\b(bf|boyfriend|patrick)\b/.test(t)
   ) || t === "/bf";
+}
+
+function wantsToCheckInbox(text) {
+  const t = text.toLowerCase();
+  return /\b(any|check|got|have|see|show)\b/.test(t) && /\b(message|messages|inbox|mail)\b/.test(t)
+    || /\bcheck (my )?(inbox|messages)\b/.test(t)
+    || /\bdo i have\b/.test(t)
+    || /\bany messages\b/.test(t)
+    || /\bmy inbox\b/.test(t);
 }
 
 async function sendMessageToPatrick(chatId, message) {
@@ -261,30 +271,6 @@ app.post("/webhook", async (req, res) => {
     return;
   }
 
-  if (text === "/inbox") {
-    await sendTyping(chatId);
-    try {
-      const result = await cli("thread", "unread", "--agent", AGENT_SLUG);
-      const messages = result.data?.messages ?? [];
-      if (messages.length === 0) {
-        await sendTelegram(chatId, "📭 No new messages.");
-      } else {
-        await sendTelegram(chatId, `📬 *${messages.length} new message${messages.length > 1 ? "s" : ""}:*`);
-        for (const m of messages) {
-          const sender = m.sender?.displayName || m.sender?.slug || "Unknown";
-          const threadId = m.threadId ?? m.thread_id;
-          await sendTelegram(chatId,
-            `*From:* ${sender}\n*Thread ID:* \`${threadId}\`\n\n${m.text}\n\n↩️ /reply ${threadId} <message>`
-          );
-          await cli("thread", "read", String(threadId), "--agent", AGENT_SLUG).catch(() => {});
-        }
-      }
-    } catch (err) {
-      await sendTelegram(chatId, `⚠️ Could not check inbox: ${err.message}`);
-    }
-    return;
-  }
-
   if (text === "/contacts" || text.startsWith("/contacts ")) {
     await sendTyping(chatId);
     const query = text.slice("/contacts".length).trim();
@@ -317,6 +303,31 @@ app.post("/webhook", async (req, res) => {
       await sendTelegram(chatId, `✅ Reply sent!`);
     } catch (err) {
       await sendTelegram(chatId, `⚠️ Failed to reply: ${err.message}`);
+    }
+    return;
+  }
+
+  // Natural language: check inbox
+  if (text === "/inbox" || wantsToCheckInbox(text)) {
+    await sendTyping(chatId);
+    try {
+      const result = await cli("thread", "unread", "--agent", AGENT_SLUG);
+      const messages = result.data?.messages ?? [];
+      if (messages.length === 0) {
+        await sendTelegram(chatId, "📭 No new messages.");
+      } else {
+        await sendTelegram(chatId, `📬 *${messages.length} new message${messages.length > 1 ? "s" : ""}:*`);
+        for (const m of messages) {
+          const sender = m.sender?.displayName || m.sender?.slug || "Unknown";
+          const threadId = m.threadId ?? m.thread_id;
+          await sendTelegram(chatId,
+            `*From:* ${sender}\n*Thread ID:* \`${threadId}\`\n\n${m.text}\n\n↩️ /reply ${threadId} <message>`
+          );
+          await cli("thread", "read", String(threadId), "--agent", AGENT_SLUG).catch(() => {});
+        }
+      }
+    } catch (err) {
+      await sendTelegram(chatId, `⚠️ Could not check inbox: ${err.message}`);
     }
     return;
   }
