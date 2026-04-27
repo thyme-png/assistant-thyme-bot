@@ -23,6 +23,7 @@ Answer directly and concisely unless a detailed explanation is needed.
 Be honest when you're unsure rather than guessing.`;
 
 const histories = new Map();
+const pendingConfirm = new Map(); // chatId → { type, ...data }
 
 // Restore masumi session from env var on startup
 async function restoreMasumiSession() {
@@ -205,17 +206,36 @@ app.post("/webhook", async (req, res) => {
       await sendTelegram(chatId, "Usage: `/bf <your message>`");
       return;
     }
-    await sendTyping(chatId);
-    try {
-      const threadResult = await cli("thread", "start",
-        "--agent", AGENT_SLUG,
-        "--recipient", BF_SLUG,
-        "--message", messageText
-      );
-      const threadId = threadResult.data?.threadId;
-      await sendTelegram(chatId, `💌 Message sent to Patrick${threadId ? ` (thread #${threadId})` : ""}!`);
-    } catch (err) {
-      await sendTelegram(chatId, `⚠️ Failed to send: ${err.message}`);
+    pendingConfirm.set(chatId, { type: "bf", messageText });
+    await sendTelegram(chatId,
+      `💌 Send this to Patrick?\n\n_"${messageText}"_\n\nReply *yes* to send or *no* to cancel.`
+    );
+    return;
+  }
+
+  // Confirmation handler (yes/no)
+  if (pendingConfirm.has(chatId)) {
+    const answer = text.toLowerCase();
+    if (answer === "yes" || answer === "y") {
+      const pending = pendingConfirm.get(chatId);
+      pendingConfirm.delete(chatId);
+      await sendTyping(chatId);
+      try {
+        const threadResult = await cli("thread", "start",
+          "--agent", AGENT_SLUG,
+          "--recipient", BF_SLUG,
+          "--message", pending.messageText
+        );
+        const threadId = threadResult.data?.threadId;
+        await sendTelegram(chatId, `✅ Sent to Patrick${threadId ? ` (thread #${threadId})` : ""}!`);
+      } catch (err) {
+        await sendTelegram(chatId, `⚠️ Failed to send: ${err.message}`);
+      }
+    } else if (answer === "no" || answer === "n" || answer === "cancel") {
+      pendingConfirm.delete(chatId);
+      await sendTelegram(chatId, "❌ Cancelled.");
+    } else {
+      await sendTelegram(chatId, "Reply *yes* to send or *no* to cancel.");
     }
     return;
   }
