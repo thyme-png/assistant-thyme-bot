@@ -130,8 +130,37 @@ async function reformatForBf(raw) {
   }
 }
 
+async function sendPendingBfMessage(chatId) {
+  const pending = pendingConfirm.get(chatId);
+  if (!pending || pending.type !== "bf_confirm") return;
+  pendingConfirm.delete(chatId);
+  await sendTyping(chatId);
+  try {
+    const threadResult = await cli("thread", "start",
+      "--agent", AGENT_SLUG,
+      "--recipient", BF_SLUG,
+      "--message", pending.formatted
+    );
+    const threadId = threadResult.data?.threadId;
+    await sendTelegram(chatId, `✅ Sent to Patrick${threadId ? ` (thread #${threadId})` : ""}! 💌`);
+  } catch (err) {
+    await sendTelegram(chatId, `⚠️ Failed to send: ${err.message}`);
+  }
+}
+
 app.post("/webhook", async (req, res) => {
   res.sendStatus(200);
+
+  // Handle emoji reactions — ✅ means "send"
+  const reaction = req.body?.message_reaction;
+  if (reaction) {
+    const chatId = String(reaction.chat?.id);
+    const isCheckmark = reaction.new_reaction?.some(r => r.type === "emoji" && r.emoji === "✅");
+    if (isCheckmark && pendingConfirm.has(chatId)) {
+      await sendPendingBfMessage(chatId);
+    }
+    return;
+  }
 
   const msg = req.body?.message;
   if (!msg?.text) return;
@@ -249,19 +278,7 @@ app.post("/webhook", async (req, res) => {
 
     if (pending.type === "bf_confirm") {
       if (answer === "send" || answer === "yes") {
-        pendingConfirm.delete(chatId);
-        await sendTyping(chatId);
-        try {
-          const threadResult = await cli("thread", "start",
-            "--agent", AGENT_SLUG,
-            "--recipient", BF_SLUG,
-            "--message", pending.formatted
-          );
-          const threadId = threadResult.data?.threadId;
-          await sendTelegram(chatId, `✅ Sent to Patrick${threadId ? ` (thread #${threadId})` : ""}! 💌`);
-        } catch (err) {
-          await sendTelegram(chatId, `⚠️ Failed to send: ${err.message}`);
-        }
+        await sendPendingBfMessage(chatId);
       } else if (answer === "edit") {
         pendingConfirm.set(chatId, { type: "bf_editing" });
         await sendTelegram(chatId, "✏️ Type your edited message:");
@@ -359,6 +376,23 @@ app.get("/", (_req, res) => res.json({ ok: true, status: "running" }));
 
 const PORT = process.env.PORT || 3000;
 
+async function registerWebhook() {
+  const url = process.env.WEBHOOK_URL;
+  if (!url) return;
+  await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/setWebhook`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      url,
+      allowed_updates: ["message", "message_reaction"],
+    }),
+  });
+  console.log(`Webhook registered: ${url}`);
+}
+
 restoreMasumiSession().then(() => {
-  app.listen(PORT, () => console.log(`Bot running on port ${PORT}`));
+  app.listen(PORT, () => {
+    console.log(`Bot running on port ${PORT}`);
+    registerWebhook().catch(console.error);
+  });
 });
