@@ -143,8 +143,8 @@ async function sendMessageToPatrick(chatId, message) {
   try {
     const result = await cli("thread", "start",
       "--agent", AGENT_SLUG,
-      "--recipient", BF_SLUG,
-      "--message", message
+      BF_SLUG,
+      message
     );
     const threadId = result.data?.threadId;
     await sendTelegram(chatId, `✅ Sent to Patrick${threadId ? ` (thread #${threadId})` : ""}! 💌`);
@@ -313,7 +313,7 @@ app.post("/webhook", async (req, res) => {
     const message = parts.slice(1).join(" ");
     await sendTyping(chatId);
     try {
-      await cli("thread", "reply", "--agent", AGENT_SLUG, "--thread", threadId, "--message", message);
+      await cli("thread", "reply", "--agent", AGENT_SLUG, threadId, message);
       await sendTelegram(chatId, `✅ Reply sent!`);
     } catch (err) {
       await sendTelegram(chatId, `⚠️ Failed to reply: ${err.message}`);
