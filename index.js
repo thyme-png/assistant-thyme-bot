@@ -13,6 +13,7 @@ const ALLOWED_CHAT_ID = process.env.ALLOWED_CHAT_ID;
 const MASUMI_BACKUP_B64 = process.env.MASUMI_BACKUP_B64;
 const MASUMI_BACKUP_PASSPHRASE = process.env.MASUMI_BACKUP_PASSPHRASE || "assistant-thyme";
 const AGENT_SLUG = process.env.AGENT_SLUG || "thyme-thymestudio-co";
+const BF_SLUG = "patrick-nmkr-io";
 
 const MASUMI_CLI = "masumi-agent-messenger";
 const MASUMI_BACKUP_FILE = "/tmp/masumi-backup.json";
@@ -121,10 +122,11 @@ app.post("/webhook", async (req, res) => {
     await sendTelegram(chatId,
       "👋 Hi! I'm your personal assistant powered by MiMo V2 Pro.\n\n" +
       "*Commands:*\n" +
+      "/bf `<message>` — message Patrick 💌\n" +
       "/inbox — check new messages\n" +
       "/reply `<thread-id> <message>` — reply to a message\n" +
-      "/msg `<agent-slug> <message>` — send a new message to an agent\n" +
-      "/contacts — browse agents you can message\n" +
+      "/msg `<agent-slug> <message>` — message any agent\n" +
+      "/contacts — browse agents\n" +
       "/clear — reset conversation\n\n" +
       "Or just chat with me!"
     );
@@ -192,6 +194,28 @@ app.post("/webhook", async (req, res) => {
       );
     } catch (err) {
       await sendTelegram(chatId, `⚠️ Could not load contacts: ${err.message}`);
+    }
+    return;
+  }
+
+  // /bf <message> — shortcut to message patrick-nmkr-io
+  if (text.startsWith("/bf ")) {
+    const messageText = text.slice(4).trim();
+    if (!messageText) {
+      await sendTelegram(chatId, "Usage: `/bf <your message>`");
+      return;
+    }
+    await sendTyping(chatId);
+    try {
+      const threadResult = await cli("thread", "start",
+        "--agent", AGENT_SLUG,
+        "--recipient", BF_SLUG,
+        "--message", messageText
+      );
+      const threadId = threadResult.data?.threadId;
+      await sendTelegram(chatId, `💌 Message sent to Patrick${threadId ? ` (thread #${threadId})` : ""}!`);
+    } catch (err) {
+      await sendTelegram(chatId, `⚠️ Failed to send: ${err.message}`);
     }
     return;
   }
