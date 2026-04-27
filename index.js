@@ -119,12 +119,14 @@ app.post("/webhook", async (req, res) => {
   // /start
   if (text === "/start") {
     await sendTelegram(chatId,
-      "👋 Hi\\! I'm your personal assistant powered by MiMo V2 Pro\\.\n\n" +
+      "👋 Hi! I'm your personal assistant powered by MiMo V2 Pro.\n\n" +
       "*Commands:*\n" +
-      "/msg `<agent-slug> <message>` — send a message to another agent\n" +
-      "/inbox — check your agent inbox\n" +
+      "/inbox — check new messages\n" +
+      "/reply `<thread-id> <message>` — reply to a message\n" +
+      "/msg `<agent-slug> <message>` — send a new message to an agent\n" +
+      "/contacts — browse agents you can message\n" +
       "/clear — reset conversation\n\n" +
-      "Or just chat with me\\!"
+      "Or just chat with me!"
     );
     return;
   }
@@ -143,16 +145,53 @@ app.post("/webhook", async (req, res) => {
       const result = await cli("thread", "unread", "--agent", AGENT_SLUG);
       const messages = result.data?.messages ?? [];
       if (messages.length === 0) {
-        await sendTelegram(chatId, "📭 No new messages in your inbox.");
+        await sendTelegram(chatId, "📭 No new messages.");
       } else {
+        await sendTelegram(chatId, `📬 *${messages.length} new message${messages.length > 1 ? "s" : ""}:*`);
         for (const m of messages) {
           const sender = m.sender?.displayName || m.sender?.slug || "Unknown";
-          await sendTelegram(chatId, `📬 *From ${sender}:*\n\n${m.text}`);
-          await cli("thread", "read", String(m.threadId), "--agent", AGENT_SLUG).catch(() => {});
+          const threadId = m.threadId ?? m.thread_id;
+          await sendTelegram(chatId,
+            `*From:* ${sender}\n` +
+            `*Thread ID:* \`${threadId}\`\n\n` +
+            `${m.text}\n\n` +
+            `↩️ Reply: /reply ${threadId} <your message>`
+          );
+          await cli("thread", "read", String(threadId), "--agent", AGENT_SLUG).catch(() => {});
         }
       }
     } catch (err) {
       await sendTelegram(chatId, `⚠️ Could not check inbox: ${err.message}`);
+    }
+    return;
+  }
+
+  // /contacts
+  if (text === "/contacts" || text.startsWith("/contacts ")) {
+    await sendTyping(chatId);
+    const query = text.slice("/contacts".length).trim() || "";
+    try {
+      const args = query
+        ? ["discover", "--query", query]
+        : ["agents", "list"];
+      const result = await cli(...args);
+      const agents = result.data?.agents ?? [];
+      if (agents.length === 0) {
+        await sendTelegram(chatId, "No agents found. Try `/contacts <name>` to search.");
+        return;
+      }
+      const lines = agents.slice(0, 20).map(a => {
+        const slug = a.slug || a.id;
+        const name = a.displayName || a.name || slug;
+        return `• *${name}* — \`${slug}\``;
+      });
+      if (agents.length > 20) lines.push(`_…and ${agents.length - 20} more. Try /contacts <name> to search._`);
+      await sendTelegram(chatId,
+        `*Agents you can message:*\n\n${lines.join("\n")}\n\n` +
+        `Send a message: /msg <slug> <text>`
+      );
+    } catch (err) {
+      await sendTelegram(chatId, `⚠️ Could not load contacts: ${err.message}`);
     }
     return;
   }
