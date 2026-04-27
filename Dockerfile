@@ -1,4 +1,5 @@
 FROM node:20-alpine
+RUN npm install -g @masumi_network/masumi-agent-messenger
 WORKDIR /app
 COPY package*.json ./
 RUN npm install --production
