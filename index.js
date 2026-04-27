@@ -248,32 +248,30 @@ app.post("/webhook", async (req, res) => {
     }
   }
 
-  // /start
-  if (text === "/start") {
+  if (text === "/start" || /\b(help|hi|hello|hey)\b/i.test(text) && text.length < 20) {
     await sendTelegram(chatId,
-      "👋 Hi! I'm your personal assistant.\n\n" +
-      "Just talk to me naturally — say things like:\n" +
+      "👋 Hi! Just talk to me naturally:\n\n" +
+      "• \"do I have any messages?\"\n" +
       "• \"send a message to my bf\"\n" +
-      "• \"check my inbox\"\n\n" +
-      "*Slash commands:*\n" +
-      "/inbox — check new messages\n" +
-      "/reply `<thread-id> <message>` — reply to a thread\n" +
-      "/contacts — browse agents\n" +
-      "/clear — reset conversation"
+      "• \"show me contacts\"\n" +
+      "• \"reply to thread 42: hey!\"\n\n" +
+      "Or just chat with me about anything!"
     );
     return;
   }
 
-  if (text === "/clear") {
+  if (/\bclear\b/i.test(text) && text.length < 20) {
     histories.delete(chatId);
     state.delete(chatId);
     await sendTelegram(chatId, "🧹 Conversation cleared.");
     return;
   }
 
-  if (text === "/contacts" || text.startsWith("/contacts ")) {
+  // Natural language: show contacts
+  if (/\b(contacts|agents|who can i message|show.*agent|list.*agent)\b/i.test(text)) {
     await sendTyping(chatId);
-    const query = text.slice("/contacts".length).trim();
+    const queryMatch = text.match(/\b(find|search|look for)\b.+?(\w[\w-]+)/i);
+    const query = queryMatch?.[2] || "";
     try {
       const result = await cli(...(query ? ["discover", "--query", query] : ["agents", "list"]));
       const agents = result.data?.agents ?? [];
@@ -289,14 +287,11 @@ app.post("/webhook", async (req, res) => {
     return;
   }
 
-  if (text.startsWith("/reply ")) {
-    const parts = text.slice(7).trim().split(" ");
-    if (parts.length < 2) {
-      await sendTelegram(chatId, "Usage: `/reply <thread-id> <message>`");
-      return;
-    }
-    const threadId = parts[0];
-    const message = parts.slice(1).join(" ");
+  // Natural language: reply to thread — "reply to 42: hey" or "reply to thread 42 hey"
+  const replyMatch = text.match(/\breply\b.{0,20}?\b(\d+)\b[:\s]+(.+)/is);
+  if (replyMatch) {
+    const threadId = replyMatch[1];
+    const message = replyMatch[2].trim();
     await sendTyping(chatId);
     try {
       await cli("thread", "reply", "--agent", AGENT_SLUG, threadId, message);
@@ -308,7 +303,7 @@ app.post("/webhook", async (req, res) => {
   }
 
   // Natural language: check inbox
-  if (text === "/inbox" || wantsToCheckInbox(text)) {
+  if (wantsToCheckInbox(text)) {
     await sendTyping(chatId);
     try {
       const result = await cli("thread", "unread", "--agent", AGENT_SLUG);
