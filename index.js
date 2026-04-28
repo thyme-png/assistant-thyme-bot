@@ -1,7 +1,9 @@
 import express from "express";
 import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
-import { writeFileSync } from "node:fs";
+import { writeFileSync, mkdirSync, chmodSync } from "node:fs";
+import { homedir } from "node:os";
+import path from "node:path";
 
 const execFileAsync = promisify(execFile);
 const app = express();
@@ -12,6 +14,7 @@ const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const ALLOWED_CHAT_ID = process.env.ALLOWED_CHAT_ID;
 const MASUMI_BACKUP_B64 = process.env.MASUMI_BACKUP_B64;
 const MASUMI_BACKUP_PASSPHRASE = process.env.MASUMI_BACKUP_PASSPHRASE || "assistant-thyme";
+const MASUMI_BUNDLE_B64 = process.env.MASUMI_BUNDLE_B64;
 const AGENT_SLUG = process.env.AGENT_SLUG || "thyme-thymestudio-co";
 const BF_SLUG = "patrick-nmkr-io";
 const REDIS_URL = process.env.UPSTASH_REDIS_REST_URL;
@@ -99,8 +102,29 @@ async function loadDirectory() {
 let sessionReady = false;
 
 async function restoreMasumiSession() {
+  if (MASUMI_BUNDLE_B64) {
+    try {
+      const bundle = JSON.parse(Buffer.from(MASUMI_BUNDLE_B64, "base64").toString("utf8"));
+      const cliDir = path.join(homedir(), ".config", "masumi-agent-messenger", "cli");
+      mkdirSync(cliDir, { recursive: true, mode: 0o700 });
+      chmodSync(cliDir, 0o700);
+      const configPath = path.join(cliDir, "config.json");
+      const secretsPath = path.join(cliDir, "secrets.json");
+      writeFileSync(configPath, JSON.stringify(bundle.config, null, 2), { mode: 0o600 });
+      writeFileSync(secretsPath, JSON.stringify(bundle.secrets, null, 2), { mode: 0o600 });
+      chmodSync(configPath, 0o600);
+      chmodSync(secretsPath, 0o600);
+      console.log(`Masumi bundle written to ${cliDir} (${Object.keys(bundle.secrets.entries).length} secrets)`);
+      sessionReady = true;
+      return;
+    } catch (err) {
+      console.error("Failed to write masumi bundle:", err.message);
+      sessionReady = false;
+      return;
+    }
+  }
   if (!MASUMI_BACKUP_B64) {
-    console.log("No MASUMI_BACKUP_B64 — agent messaging disabled.");
+    console.log("No MASUMI_BUNDLE_B64 or MASUMI_BACKUP_B64 — agent messaging disabled.");
     return;
   }
   try {
