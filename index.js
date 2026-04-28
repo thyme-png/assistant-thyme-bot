@@ -368,19 +368,28 @@ app.post("/webhook", async (req, res) => {
     // Agent picker — waiting for user to pick a number or name
     if (s.type === "agent_select") {
       const pick = text.trim();
-      const byNumber = parseInt(pick) - 1;
+      const lower = pick.toLowerCase();
       const agents = s.agents;
-      const nicknameSlug = resolveNickname(pick);
-      const chosen = (!isNaN(byNumber) && agents[byNumber])
-        ? agents[byNumber]
-        : nicknameSlug
-          ? { slug: nicknameSlug, displayName: pick }
-          : agents.find(a => (a.slug || "").includes(pick.toLowerCase()) || (a.displayName || "").toLowerCase().includes(pick.toLowerCase()));
+
+      if (lower === "cancel") { state.delete(chatId); await sendTelegram(chatId, "❌ Cancelled."); return; }
+
+      // Positive / affirmative → pick first agent
+      const isAffirmative = /^(yes|yeah|yep|yup|sure|him|her|them|he|she|it|ok|okay|that one|first one|1st)$/i.test(lower);
+      const byNumber = parseInt(pick) - 1;
+      const nicknameSlug = resolveNickname(lower);
+
+      const chosen = isAffirmative
+        ? agents[0]
+        : (!isNaN(byNumber) && agents[byNumber])
+          ? agents[byNumber]
+          : nicknameSlug
+            ? { slug: nicknameSlug, displayName: pick }
+            : agents.find(a => (a.slug || "").includes(lower) || (a.displayName || "").toLowerCase().includes(lower));
+
       if (!chosen) {
         await sendTelegram(chatId, "Pick a number from the list, or say cancel.");
         return;
       }
-      if (pick.toLowerCase() === "cancel") { state.delete(chatId); await sendTelegram(chatId, "❌ Cancelled."); return; }
       state.set(chatId, { type: "agent_awaiting_message", slug: chosen.slug, name: chosen.displayName || chosen.slug });
       await sendTelegram(chatId, `💬 What do you want to say to *${chosen.displayName || chosen.slug}*?`);
       return;
