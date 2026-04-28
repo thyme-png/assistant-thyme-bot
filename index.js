@@ -266,6 +266,18 @@ async function sendMessageToPatrick(chatId, message) {
   }
 }
 
+async function sendAgentMessage(chatId, s) {
+  state.delete(chatId);
+  await ack(chatId, `📨 Sending to ${s.name}...`);
+  try {
+    const result = await cli("thread", "start", "--agent", AGENT_SLUG, s.slug, s.message);
+    const threadId = result.data?.threadId;
+    await sendTelegram(chatId, `✅ Sent to *${s.name}*${threadId ? ` (thread #${threadId})` : ""}!`);
+  } catch (err) {
+    await sendTelegram(chatId, `⚠️ Failed to send: ${err.message}`);
+  }
+}
+
 async function showBfConfirm(chatId, message) {
   state.set(chatId, { type: "bf_confirm", message });
   await sendTelegram(chatId, `💌 "${message}"`, [
@@ -316,16 +328,33 @@ app.post("/webhook", async (req, res) => {
       if (s?.type === "bf_confirm") await sendMessageToPatrick(chatId, s.message);
       return;
     }
-
     if (data === "bf_cancel") {
       state.delete(chatId);
       await sendTelegram(chatId, "❌ Cancelled.");
       return;
     }
-
     if (data === "bf_edit") {
       state.set(chatId, { type: "bf_editing" });
       await sendTelegram(chatId, "✏️ Type your edited message:");
+      return;
+    }
+
+    if (data === "msg_send") {
+      const s = state.get(chatId);
+      if (s?.type === "agent_confirm") await sendAgentMessage(chatId, s);
+      return;
+    }
+    if (data === "msg_cancel") {
+      state.delete(chatId);
+      await sendTelegram(chatId, "❌ Cancelled.");
+      return;
+    }
+    if (data === "msg_edit") {
+      const s = state.get(chatId);
+      if (s?.type === "agent_confirm") {
+        state.set(chatId, { type: "agent_awaiting_message", slug: s.slug, name: s.name });
+        await sendTelegram(chatId, "✏️ Type your edited message:");
+      }
       return;
     }
 
@@ -406,21 +435,15 @@ app.post("/webhook", async (req, res) => {
 
     if (s.type === "agent_awaiting_message") {
       state.set(chatId, { type: "agent_confirm", slug: s.slug, name: s.name, message: text });
-      await sendTelegram(chatId, `📨 To *${s.name}*: "${text}"\n\ny / n / e`);
+      await sendTelegram(chatId, `📨 To *${s.name}*:\n\n"${text}"`, [
+        [{ text: "✅ Send", callback_data: "msg_send" }, { text: "✏️ Edit", callback_data: "msg_edit" }, { text: "❌ Cancel", callback_data: "msg_cancel" }]
+      ]);
       return;
     }
 
     if (s.type === "agent_confirm") {
       if (/^(y|yes|send|yep|yup|ok|okay)$/i.test(answer)) {
-        state.delete(chatId);
-        await ack(chatId, `📨 Sending to ${s.name}...`);
-        try {
-          const result = await cli("thread", "start", "--agent", AGENT_SLUG, s.slug, s.message);
-          const threadId = result.data?.threadId;
-          await sendTelegram(chatId, `✅ Sent to *${s.name}*${threadId ? ` (thread #${threadId})` : ""}!`);
-        } catch (err) {
-          await sendTelegram(chatId, `⚠️ Failed to send: ${err.message}`);
-        }
+        await sendAgentMessage(chatId, s);
       } else if (/^(edit|e|change|rewrite|fix)$/i.test(answer)) {
         state.set(chatId, { type: "agent_awaiting_message", slug: s.slug, name: s.name });
         await sendTelegram(chatId, "✏️ Type your edited message:");
