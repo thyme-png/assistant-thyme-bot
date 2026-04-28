@@ -298,10 +298,7 @@ async function sendMessageToPatrick(chatId, message) {
 
 async function showBfConfirm(chatId, message) {
   state.set(chatId, { type: "bf_confirm", message });
-  await sendTelegram(chatId,
-    `💌 Ready to send to Patrick:\n\n"${message}"\n\n` +
-    `Reply *send*, *clean it up*, or *cancel*.`
-  );
+  await sendTelegram(chatId, `💌 "${message}"\n\nsend / n / edit`);
 }
 
 app.post("/webhook", async (req, res) => {
@@ -344,23 +341,22 @@ app.post("/webhook", async (req, res) => {
       return;
     }
 
-    // Showing message as-is, waiting for send / clean it up / cancel
     if (s.type === "bf_confirm") {
-      if (answer === "send" || answer === "yes" || answer === "send it") {
+      if (/^(y|yes|send|yep|yup|ok|okay)$/i.test(answer)) {
         await sendMessageToPatrick(chatId, s.message);
-      } else if (/clean|reformat|fix|rewrite|change/.test(answer)) {
-        await ack(chatId, "✨ Rewriting...");
-        const reformatted = await reformatForBf(s.message);
-        state.set(chatId, { type: "bf_confirm_reformatted", message: s.message, reformatted });
-        await sendTelegram(chatId,
-          `✨ Here's a cleaned-up version:\n\n"${reformatted}"\n\n` +
-          `Reply *send this*, *keep original*, or *cancel*.`
-        );
-      } else if (answer === "cancel" || answer === "no") {
+      } else if (/^(edit|e|change|rewrite|fix)$/i.test(answer)) {
+        state.set(chatId, { type: "bf_editing" });
+        await sendTelegram(chatId, "✏️ Type your edited message:");
+      } else if (/^(n|no|cancel|nope)$/i.test(answer)) {
         state.delete(chatId);
         await sendTelegram(chatId, "❌ Cancelled.");
+      } else if (/clean|reformat/.test(answer)) {
+        await ack(chatId, "✨ Rewriting...");
+        const reformatted = await reformatForBf(s.message);
+        state.set(chatId, { type: "bf_confirm", message: reformatted });
+        await sendTelegram(chatId, `💌 "${reformatted}"\n\nsend / n / edit`);
       } else {
-        await sendTelegram(chatId, `Reply *send*, *clean it up*, or *cancel*.`);
+        await sendTelegram(chatId, "send / n / edit");
       }
       return;
     }
@@ -395,17 +391,14 @@ app.post("/webhook", async (req, res) => {
       return;
     }
 
-    // Waiting for message to a specific agent
     if (s.type === "agent_awaiting_message") {
       state.set(chatId, { type: "agent_confirm", slug: s.slug, name: s.name, message: text });
-      await sendTelegram(chatId, `📨 Send this to *${s.name}*?\n\n"${text}"\n\nReply *send* or *cancel*.`);
+      await sendTelegram(chatId, `📨 To *${s.name}*: "${text}"\n\nsend / n / edit`);
       return;
     }
 
-    // Confirm send to agent
     if (s.type === "agent_confirm") {
-      const answer = text.toLowerCase().trim();
-      if (answer === "send" || answer === "yes") {
+      if (/^(y|yes|send|yep|yup|ok|okay)$/i.test(answer)) {
         state.delete(chatId);
         await ack(chatId, `📨 Sending to ${s.name}...`);
         try {
@@ -415,29 +408,18 @@ app.post("/webhook", async (req, res) => {
         } catch (err) {
           await sendTelegram(chatId, `⚠️ Failed to send: ${err.message}`);
         }
-      } else if (answer === "cancel" || answer === "no") {
+      } else if (/^(edit|e|change|rewrite|fix)$/i.test(answer)) {
+        state.set(chatId, { type: "agent_awaiting_message", slug: s.slug, name: s.name });
+        await sendTelegram(chatId, "✏️ Type your edited message:");
+      } else if (/^(n|no|cancel|nope)$/i.test(answer)) {
         state.delete(chatId);
         await sendTelegram(chatId, "❌ Cancelled.");
       } else {
-        await sendTelegram(chatId, "Reply *send* or *cancel*.");
+        await sendTelegram(chatId, "send / n / edit");
       }
       return;
     }
 
-    // Showing reformatted version
-    if (s.type === "bf_confirm_reformatted") {
-      if (/send this|send|yes/.test(answer)) {
-        await sendMessageToPatrick(chatId, s.reformatted);
-      } else if (/keep|original|mine/.test(answer)) {
-        await sendMessageToPatrick(chatId, s.message);
-      } else if (answer === "cancel" || answer === "no") {
-        state.delete(chatId);
-        await sendTelegram(chatId, "❌ Cancelled.");
-      } else {
-        await sendTelegram(chatId, `Reply *send this*, *keep original*, or *cancel*.`);
-      }
-      return;
-    }
   }
 
   if (text === "/start" || /what can i do/i.test(text) || /\b(help|hi|hello|hey)\b/i.test(text) && text.length < 20) {
