@@ -457,7 +457,7 @@ app.post("/webhook", async (req, res) => {
     const queryMatch = text.match(/\b(find|search|look for)\b.+?(\w[\w-]+)/i);
     const query = queryMatch?.[2] || "";
     try {
-      const result = await cli(...(query ? ["discover", "--query", query] : ["agents", "list"]));
+      const result = await cli("discover", "--query", query || "");
       const agents = result.data?.agents ?? [];
       if (agents.length === 0) {
         await sendTelegram(chatId, "No agents found.");
@@ -520,9 +520,14 @@ app.post("/webhook", async (req, res) => {
       .map(([nick, slug]) => ({ slug, displayName: nick.charAt(0).toUpperCase() + nick.slice(1) }));
     let discovered = [];
     try {
-      const result = await cli("discover", "--query", "agent");
+      const result = await cli("discover", "--query", "");
       discovered = result.data?.agents ?? [];
-    } catch {}
+    } catch {
+      try {
+        const result = await cli("discover", "--query", "a");
+        discovered = result.data?.agents ?? [];
+      } catch {}
+    }
     // Merge, dedupe by slug
     const seen = new Set(knownAgents.map(a => a.slug));
     const all = [...knownAgents, ...discovered.filter(a => !seen.has(a.slug))];
