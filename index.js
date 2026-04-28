@@ -509,7 +509,7 @@ app.post("/webhook", async (req, res) => {
   if (wantsToSendMessage(text)) {
     await sendTyping(chatId);
     try {
-      const result = await cli("agents", "list");
+      const result = await cli("discover");
       const agents = result.data?.agents ?? [];
       if (agents.length === 0) {
         await sendTelegram(chatId, "No agents found on the network.");
