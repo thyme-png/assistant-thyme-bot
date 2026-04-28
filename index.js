@@ -55,9 +55,46 @@ Triage: PERSON messages first with a casual summary, WORKER messages with task/c
 Short, direct, a little personality. This is chat. No bullet-point essays unless asked.`;
 
 const histories = new Map();
-
-// state per chat: { type: "bf_awaiting" | "bf_confirm" | "bf_confirm_reformatted", message?, reformatted? }
 const state = new Map();
+let agentDirectory = []; // cached full agent list
+
+async function buildDirectory() {
+  console.log("Building agent directory...");
+  const seen = new Set();
+  const all = [];
+
+  // Search common letters to maximize coverage
+  for (const q of ["", "a", "e", "i", "o", "s", "t", "n", "agent", "io"]) {
+    try {
+      const result = await cli("discover", "--query", q);
+      for (const a of result.data?.agents ?? []) {
+        if (!seen.has(a.slug)) {
+          seen.add(a.slug);
+          all.push(a);
+        }
+      }
+    } catch {}
+  }
+
+  if (all.length > 0) {
+    agentDirectory = all;
+    await redisSet("agent_directory", all);
+    console.log(`Directory built: ${all.length} agents`);
+  } else {
+    console.log("No agents found in directory build");
+  }
+  return all;
+}
+
+async function loadDirectory() {
+  const saved = await redisGet("agent_directory");
+  if (saved?.length) {
+    agentDirectory = saved;
+    console.log(`Loaded ${saved.length} agents from Redis`);
+  }
+  // Refresh in background regardless
+  buildDirectory().catch(console.error);
+}
 
 async function restoreMasumiSession() {
   if (!MASUMI_BACKUP_B64) {
@@ -548,37 +585,32 @@ app.post("/webhook", async (req, res) => {
     return;
   }
 
-  // Natural language: send a message (shows agent picker)
+  // "refresh contacts/directory"
+  if (/\b(refresh|update|reload)\b/i.test(text) && /\b(contacts|agents|directory|list)\b/i.test(text)) {
+    await ack(chatId, "🔄 Refreshing agent directory...");
+    const all = await buildDirectory();
+    await sendTelegram(chatId, `✅ Directory updated — ${all.length} agents found.`);
+    return;
+  }
+
+  // Natural language: send a message (shows agent picker from cached directory)
   if (wantsToSendMessage(text)) {
-    await ack(chatId, "🔍 Loading agents...");
-    // Build agent list: always include known contacts, then try to discover more
     const knownAgents = Object.entries(NICKNAMES)
-      .filter(([nick]) => nick !== "bf" && nick !== "boyfriend") // dedupe
+      .filter(([nick]) => nick !== "bf" && nick !== "boyfriend")
       .map(([nick, slug]) => ({ slug, displayName: nick.charAt(0).toUpperCase() + nick.slice(1) }));
-    let discovered = [];
-    try {
-      const result = await cli("discover", "--query", "");
-      discovered = result.data?.agents ?? [];
-    } catch {
-      try {
-        const result = await cli("discover", "--query", "a");
-        discovered = result.data?.agents ?? [];
-      } catch {}
-    }
-    // Merge, dedupe by slug
     const seen = new Set(knownAgents.map(a => a.slug));
-    const all = [...knownAgents, ...discovered.filter(a => !seen.has(a.slug))];
+    const all = [...knownAgents, ...agentDirectory.filter(a => !seen.has(a.slug))];
     if (all.length === 0) {
-      await sendTelegram(chatId, "No agents found. Try saying 'send a message to my bf'.");
+      await sendTelegram(chatId, "No agents in directory yet. Say \"refresh contacts\" to load them.");
       return;
     }
     state.set(chatId, { type: "agent_select", agents: all });
     const buttons = all.slice(0, 20).map(a => ([{
-      text: a.displayName || a.slug,
-      callback_data: `agent_select:${a.slug}:${a.displayName || a.slug}`,
+      text: a.displayName || a.name || a.slug,
+      callback_data: `agent_select:${a.slug}:${a.displayName || a.name || a.slug}`,
     }]));
     buttons.push([{ text: "❌ Cancel", callback_data: "agent_select:cancel" }]);
-    await sendTelegram(chatId, "Who do you want to message?", buttons);
+    await sendTelegram(chatId, `Who do you want to message? (${all.length} agents)`, buttons);
     return;
   }
 
@@ -664,6 +696,7 @@ async function registerWebhook() {
 
 restoreMasumiSession().then(async () => {
   await loadNicknames();
+  loadDirectory().catch(console.error);
   app.listen(PORT, () => {
     console.log(`Bot running on port ${PORT}`);
     registerWebhook().catch(console.error);
