@@ -96,6 +96,8 @@ async function loadDirectory() {
   buildDirectory().catch(console.error);
 }
 
+let sessionReady = false;
+
 async function restoreMasumiSession() {
   if (!MASUMI_BACKUP_B64) {
     console.log("No MASUMI_BACKUP_B64 — agent messaging disabled.");
@@ -104,16 +106,26 @@ async function restoreMasumiSession() {
   try {
     const json = Buffer.from(MASUMI_BACKUP_B64, "base64").toString("utf8");
     writeFileSync(MASUMI_BACKUP_FILE, json);
-    execFileSync(MASUMI_CLI, [
+    const out = execFileSync(MASUMI_CLI, [
       "account", "backup", "import",
       "--file", MASUMI_BACKUP_FILE,
       "--passphrase", MASUMI_BACKUP_PASSPHRASE,
       "--json",
-    ]);
-    console.log("Masumi session restored.");
+    ], { encoding: "utf8" });
+    console.log("Masumi session restored:", out.slice(0, 200));
+    sessionReady = true;
   } catch (err) {
-    console.error("Failed to restore masumi session:", err.message);
+    console.error("Failed to restore masumi session:", err.message, err.stderr || "");
+    sessionReady = false;
   }
+}
+
+function requireSession(chatId) {
+  if (!sessionReady) {
+    sendTelegram(chatId, "⚠️ Masumi session not connected. Update MASUMI\\_BACKUP\\_B64 on Render with a fresh export.");
+    return false;
+  }
+  return true;
 }
 
 async function cli(...args) {
