@@ -194,6 +194,11 @@ async function sendTyping(chatId) {
   });
 }
 
+async function ack(chatId, text) {
+  await sendTelegram(chatId, text);
+  sendTyping(chatId); // keep typing indicator going
+}
+
 async function askMiMo(chatId, userMessage) {
   if (!histories.has(chatId)) histories.set(chatId, []);
   const history = histories.get(chatId);
@@ -277,7 +282,7 @@ function wantsToCheckInbox(text) {
 
 async function sendMessageToPatrick(chatId, message) {
   state.delete(chatId);
-  await sendTyping(chatId);
+  await ack(chatId, "💌 Sending to Patrick...");
   try {
     const result = await cli("thread", "start",
       "--agent", AGENT_SLUG,
@@ -344,7 +349,7 @@ app.post("/webhook", async (req, res) => {
       if (answer === "send" || answer === "yes" || answer === "send it") {
         await sendMessageToPatrick(chatId, s.message);
       } else if (/clean|reformat|fix|rewrite|change/.test(answer)) {
-        await sendTyping(chatId);
+        await ack(chatId, "✨ Rewriting...");
         const reformatted = await reformatForBf(s.message);
         state.set(chatId, { type: "bf_confirm_reformatted", message: s.message, reformatted });
         await sendTelegram(chatId,
@@ -393,7 +398,7 @@ app.post("/webhook", async (req, res) => {
       const answer = text.toLowerCase().trim();
       if (answer === "send" || answer === "yes") {
         state.delete(chatId);
-        await sendTyping(chatId);
+        await ack(chatId, `📨 Sending to ${s.name}...`);
         try {
           const result = await cli("thread", "start", "--agent", AGENT_SLUG, s.slug, s.message);
           const threadId = result.data?.threadId;
@@ -447,7 +452,7 @@ app.post("/webhook", async (req, res) => {
 
   // Natural language: show contacts
   if (/\b(contacts|agents|who can i message|show.*agent|list.*agent)\b/i.test(text)) {
-    await sendTyping(chatId);
+    await ack(chatId, "🔍 Loading agents...");
     const queryMatch = text.match(/\b(find|search|look for)\b.+?(\w[\w-]+)/i);
     const query = queryMatch?.[2] || "";
     try {
@@ -470,7 +475,7 @@ app.post("/webhook", async (req, res) => {
   if (replyMatch) {
     const threadId = replyMatch[1];
     const message = replyMatch[2].trim();
-    await sendTyping(chatId);
+    await ack(chatId, "↩️ Sending reply...");
     try {
       await cli("thread", "reply", "--agent", AGENT_SLUG, threadId, message);
       await sendTelegram(chatId, `✅ Reply sent!`);
@@ -482,7 +487,7 @@ app.post("/webhook", async (req, res) => {
 
   // Natural language: check inbox
   if (wantsToCheckInbox(text)) {
-    await sendTyping(chatId);
+    await ack(chatId, "📬 Checking your inbox...");
     try {
       const result = await cli("thread", "unread", "--agent", AGENT_SLUG);
       const messages = result.data?.messages ?? [];
@@ -507,7 +512,7 @@ app.post("/webhook", async (req, res) => {
 
   // Natural language: send a message (shows agent picker)
   if (wantsToSendMessage(text)) {
-    await sendTyping(chatId);
+    await ack(chatId, "🔍 Loading agents...");
     try {
       const result = await cli("discover");
       const agents = result.data?.agents ?? [];
@@ -569,7 +574,7 @@ app.post("/webhook", async (req, res) => {
 
   // Default: chat with MiMo
   try {
-    await sendTyping(chatId);
+    sendTyping(chatId);
     const reply = await askMiMo(chatId, text);
     await sendTelegram(chatId, reply);
   } catch (err) {
