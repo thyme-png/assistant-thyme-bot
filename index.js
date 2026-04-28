@@ -583,17 +583,17 @@ app.post("/webhook", async (req, res) => {
   // Natural language: show contacts
   if (/\b(contacts|agents|who can i message|show.*agent|list.*agent)\b/i.test(text)) {
     await ack(chatId, "🔍 Loading agents...");
-    const queryMatch = text.match(/\b(find|search|look for)\b.+?(\w[\w-]+)/i);
-    const query = queryMatch?.[2] || "";
     try {
-      const result = await cli("discover", "search", query || "");
-      const agents = result.data?.agents ?? [];
+      let agents = agentDirectory;
       if (agents.length === 0) {
-        await sendTelegram(chatId, "No agents found.");
+        agents = await buildDirectory();
+      }
+      if (agents.length === 0) {
+        await sendTelegram(chatId, "No agents found. Try \"refresh contacts\" in a moment.");
         return;
       }
-      const lines = agents.slice(0, 20).map(a => `• ${a.displayName || a.name || a.slug} — \`${a.slug}\``);
-      await sendTelegram(chatId, `*Agents:*\n\n${lines.join("\n")}`);
+      const lines = agents.slice(0, 30).map(a => `• ${a.displayName || a.name || a.slug} — \`${a.slug}\``);
+      await sendTelegram(chatId, `*Agents (${agents.length}):*\n\n${lines.join("\n")}`);
     } catch (err) {
       await sendTelegram(chatId, `⚠️ Could not load contacts: ${err.message}`);
     }
