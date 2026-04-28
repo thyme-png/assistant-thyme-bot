@@ -64,9 +64,9 @@ async function buildDirectory() {
   const all = [];
 
   // Search common letters to maximize coverage
-  for (const q of ["", "a", "e", "i", "o", "s", "t", "n", "agent", "io"]) {
+  for (const q of ["a", "e", "i", "o", "s", "t", "n", "agent", "io", "bot", "patrick"]) {
     try {
-      const result = await cli("discover", "--query", q);
+      const result = await cli("discover", "search", q);
       for (const a of result.data?.agents ?? []) {
         if (!seen.has(a.slug)) {
           seen.add(a.slug);
@@ -548,7 +548,7 @@ app.post("/webhook", async (req, res) => {
     const queryMatch = text.match(/\b(find|search|look for)\b.+?(\w[\w-]+)/i);
     const query = queryMatch?.[2] || "";
     try {
-      const result = await cli("discover", "--query", query || "");
+      const result = await cli("discover", "search", query || "");
       const agents = result.data?.agents ?? [];
       if (agents.length === 0) {
         await sendTelegram(chatId, "No agents found.");
