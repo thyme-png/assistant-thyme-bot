@@ -513,19 +513,33 @@ app.post("/webhook", async (req, res) => {
   // Natural language: send a message (shows agent picker)
   if (wantsToSendMessage(text)) {
     await ack(chatId, "🔍 Loading agents...");
+    // Build agent list: always include known contacts, then try to discover more
+    const knownAgents = Object.entries(NICKNAMES)
+      .filter(([nick]) => nick !== "bf" && nick !== "boyfriend") // dedupe
+      .map(([nick, slug]) => ({ slug, displayName: nick.charAt(0).toUpperCase() + nick.slice(1) }));
+    let discovered = [];
     try {
-      const result = await cli("discover");
-      const agents = result.data?.agents ?? [];
-      if (agents.length === 0) {
-        await sendTelegram(chatId, "No agents found on the network.");
-        return;
-      }
-      state.set(chatId, { type: "agent_select", agents });
-      const lines = agents.slice(0, 20).map((a, i) => `${i + 1}. ${a.displayName || a.name || a.slug}`);
-      await sendTelegram(chatId, `Who do you want to message?\n\n${lines.join("\n")}\n\nPick a number or say cancel.`);
-    } catch (err) {
-      await sendTelegram(chatId, `⚠️ Could not load agents: ${err.message}`);
+      const result = await cli("discover", "--query", "agent");
+      discovered = result.data?.agents ?? [];
+    } catch {}
+    // Merge, dedupe by slug
+    const seen = new Set(knownAgents.map(a => a.slug));
+    const all = [...knownAgents, ...discovered.filter(a => !seen.has(a.slug))];
+    if (all.length === 0) {
+      await sendTelegram(chatId, "No agents found. Try saying 'send a message to my bf'.");
+      return;
     }
+    state.set(chatId, { type: "agent_select", agents: all });
+    const lines = all.slice(0, 20).map((a, i) => `${i + 1}. ${a.displayName || a.slug}`);
+    await sendTelegram(chatId, `Who do you want to message?\n\n${lines.join("\n")}\n\nPick a number or say cancel.`);
+    return;
+  }
+
+  // "yes message X" or "yes send X" — treat as bf message
+  const yesMessageMatch = text.match(/^(yes\s+)?(message|msg|send|text)\s+(.+)/i);
+  if (yesMessageMatch && !wantsToSendMessage(text)) {
+    const messageText = yesMessageMatch[3].trim();
+    await showBfConfirm(chatId, messageText);
     return;
   }
 
