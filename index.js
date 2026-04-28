@@ -117,13 +117,30 @@ async function restoreMasumiSession() {
 }
 
 async function cli(...args) {
+  console.log(`[CLI] ${MASUMI_CLI} ${args.join(" ")}`);
   try {
-    const { stdout } = await execFileAsync(MASUMI_CLI, [...args, "--json"]);
-    return JSON.parse(stdout);
+    const { stdout, stderr } = await execFileAsync(MASUMI_CLI, [...args, "--json"]);
+    if (stderr) console.error(`[CLI stderr]`, stderr);
+    const parsed = JSON.parse(stdout);
+    // Treat API-level errors as thrown exceptions
+    if (parsed.error || parsed.status === "error") {
+      throw new Error(parsed.error?.message || parsed.message || JSON.stringify(parsed));
+    }
+    console.log(`[CLI result]`, JSON.stringify(parsed).slice(0, 200));
+    return parsed;
   } catch (err) {
     if (err.stdout) {
-      try { return JSON.parse(err.stdout); } catch {}
+      try {
+        const parsed = JSON.parse(err.stdout);
+        if (parsed.error || parsed.status === "error") {
+          throw new Error(parsed.error?.message || parsed.message || JSON.stringify(parsed));
+        }
+        return parsed;
+      } catch (parseErr) {
+        if (parseErr !== err) throw parseErr;
+      }
     }
+    console.error(`[CLI error] ${err.message}\nstderr: ${err.stderr || ""}\nstdout: ${err.stdout || ""}`);
     throw err;
   }
 }
