@@ -91,11 +91,21 @@ async function cli(...args) {
   }
 }
 
-async function sendTelegram(chatId, text) {
+async function sendTelegram(chatId, text, buttons = null) {
+  const body = { chat_id: chatId, text, parse_mode: "Markdown" };
+  if (buttons) body.reply_markup = { inline_keyboard: buttons };
   await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, text, parse_mode: "Markdown" }),
+    body: JSON.stringify(body),
+  });
+}
+
+async function answerCallback(callbackId) {
+  await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/answerCallbackQuery`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ callback_query_id: callbackId }),
   });
 }
 
@@ -258,7 +268,9 @@ async function sendMessageToPatrick(chatId, message) {
 
 async function showBfConfirm(chatId, message) {
   state.set(chatId, { type: "bf_confirm", message });
-  await sendTelegram(chatId, `💌 "${message}"\n\ny / n / e`);
+  await sendTelegram(chatId, `💌 "${message}"`, [
+    [{ text: "✅ Send", callback_data: "bf_send" }, { text: "✏️ Edit", callback_data: "bf_edit" }, { text: "❌ Cancel", callback_data: "bf_cancel" }]
+  ]);
 }
 
 app.post("/webhook", async (req, res) => {
@@ -276,6 +288,47 @@ app.post("/webhook", async (req, res) => {
     if (isCheckmark && s?.type === "bf_confirm_reformatted") {
       await sendMessageToPatrick(chatId, s.reformatted);
     }
+    return;
+  }
+
+  // Inline button taps
+  const cb = req.body?.callback_query;
+  if (cb) {
+    await answerCallback(cb.id);
+    const chatId = String(cb.message.chat.id);
+    const data = cb.data;
+
+    if (data === "agent_select:cancel") {
+      state.delete(chatId);
+      await sendTelegram(chatId, "❌ Cancelled.");
+      return;
+    }
+
+    if (data.startsWith("agent_select:")) {
+      const [, slug, name] = data.split(":");
+      state.set(chatId, { type: "agent_awaiting_message", slug, name: name || slug });
+      await sendTelegram(chatId, `💬 What do you want to say to *${name || slug}*?`);
+      return;
+    }
+
+    if (data === "bf_send") {
+      const s = state.get(chatId);
+      if (s?.type === "bf_confirm") await sendMessageToPatrick(chatId, s.message);
+      return;
+    }
+
+    if (data === "bf_cancel") {
+      state.delete(chatId);
+      await sendTelegram(chatId, "❌ Cancelled.");
+      return;
+    }
+
+    if (data === "bf_edit") {
+      state.set(chatId, { type: "bf_editing" });
+      await sendTelegram(chatId, "✏️ Type your edited message:");
+      return;
+    }
+
     return;
   }
 
@@ -497,8 +550,12 @@ app.post("/webhook", async (req, res) => {
       return;
     }
     state.set(chatId, { type: "agent_select", agents: all });
-    const lines = all.slice(0, 20).map((a, i) => `${i + 1}. ${a.displayName || a.slug}`);
-    await sendTelegram(chatId, `Who do you want to message?\n\n${lines.join("\n")}\n\nPick a number or say cancel.`);
+    const buttons = all.slice(0, 20).map(a => ([{
+      text: a.displayName || a.slug,
+      callback_data: `agent_select:${a.slug}:${a.displayName || a.slug}`,
+    }]));
+    buttons.push([{ text: "❌ Cancel", callback_data: "agent_select:cancel" }]);
+    await sendTelegram(chatId, "Who do you want to message?", buttons);
     return;
   }
 
@@ -576,7 +633,7 @@ async function registerWebhook() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       url,
-      allowed_updates: ["message", "message_reaction"],
+      allowed_updates: ["message", "message_reaction", "callback_query"],
     }),
   });
   console.log(`Webhook registered: ${url}`);
