@@ -440,14 +440,24 @@ app.post("/webhook", async (req, res) => {
     }
   }
 
-  if (text === "/start" || /\b(help|hi|hello|hey)\b/i.test(text) && text.length < 20) {
+  if (text === "/start" || /what can i do/i.test(text) || /\b(help|hi|hello|hey)\b/i.test(text) && text.length < 20) {
     await sendTelegram(chatId,
-      "👋 Hi! Just talk to me naturally:\n\n" +
-      "• \"do I have any messages?\"\n" +
-      "• \"send a message to my bf\"\n" +
-      "• \"show me contacts\"\n" +
-      "• \"reply to thread 42: hey!\"\n\n" +
-      "Or just chat with me about anything!"
+      "👋 *Here's what I can do:*\n\n" +
+      "📬 *Inbox*\n" +
+      "\"do I have any messages?\"\n\n" +
+      "💌 *Message your bf*\n" +
+      "\"send a message to my bf\"\n" +
+      "\"message Patrick: hey!\"\n\n" +
+      "📨 *Message any agent*\n" +
+      "\"I want to send a message\" → pick from list\n\n" +
+      "↩️ *Reply to a message*\n" +
+      "\"reply to thread 42: sounds good!\"\n\n" +
+      "🔍 *Browse agents*\n" +
+      "\"show me contacts\"\n\n" +
+      "🏷 *Look up a slug*\n" +
+      "\"what's Patrick's slug?\"\n\n" +
+      "💬 *Chat*\n" +
+      "Anything else — just talk to me!"
     );
     return;
   }
