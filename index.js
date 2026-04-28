@@ -111,7 +111,7 @@ async function restoreMasumiSession() {
       "--file", MASUMI_BACKUP_FILE,
       "--passphrase", MASUMI_BACKUP_PASSPHRASE,
       "--json",
-    ], { encoding: "utf8" });
+    ], { encoding: "utf8", env: MASUMI_ENV });
     console.log("Masumi session restored:", out.slice(0, 200));
     sessionReady = true;
   } catch (err) {
@@ -128,10 +128,12 @@ function requireSession(chatId) {
   return true;
 }
 
+const MASUMI_ENV = { ...process.env, MASUMI_FORCE_FILE_BACKEND: "1" };
+
 async function cli(...args) {
   console.log(`[CLI] ${MASUMI_CLI} ${args.join(" ")}`);
   try {
-    const { stdout, stderr } = await execFileAsync(MASUMI_CLI, [...args, "--json"]);
+    const { stdout, stderr } = await execFileAsync(MASUMI_CLI, [...args, "--json"], { env: MASUMI_ENV });
     if (stderr) console.error(`[CLI stderr]`, stderr);
     const parsed = JSON.parse(stdout);
     // Treat API-level errors as thrown exceptions
