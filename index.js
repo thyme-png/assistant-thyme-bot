@@ -15,6 +15,12 @@ const MASUMI_BACKUP_PASSPHRASE = process.env.MASUMI_BACKUP_PASSPHRASE || "assist
 const AGENT_SLUG = process.env.AGENT_SLUG || "thyme-thymestudio-co";
 const BF_SLUG = "patrick-nmkr-io";
 
+const NICKNAMES = {
+  "patrick": "patrick-nmkr-io",
+  "bf": "patrick-nmkr-io",
+  "boyfriend": "patrick-nmkr-io",
+};
+
 const MASUMI_CLI = "masumi-agent-messenger";
 const MASUMI_BACKUP_FILE = "/tmp/masumi-backup.json";
 
@@ -138,6 +144,11 @@ function wantsToMessageBf(text) {
   ) || t === "/bf";
 }
 
+function resolveNickname(text) {
+  const t = text.toLowerCase().trim();
+  return NICKNAMES[t] || null;
+}
+
 function wantsToSendMessage(text) {
   const t = text.toLowerCase();
   return /\b(send|write|compose)\b/.test(t) && /\b(message|msg)\b/.test(t) && !wantsToMessageBf(text);
@@ -242,9 +253,12 @@ app.post("/webhook", async (req, res) => {
       const pick = text.trim();
       const byNumber = parseInt(pick) - 1;
       const agents = s.agents;
-      const chosen = !isNaN(byNumber) && agents[byNumber]
+      const nicknameSlug = resolveNickname(pick);
+      const chosen = (!isNaN(byNumber) && agents[byNumber])
         ? agents[byNumber]
-        : agents.find(a => (a.slug || "").includes(pick.toLowerCase()) || (a.displayName || "").toLowerCase().includes(pick.toLowerCase()));
+        : nicknameSlug
+          ? { slug: nicknameSlug, displayName: pick }
+          : agents.find(a => (a.slug || "").includes(pick.toLowerCase()) || (a.displayName || "").toLowerCase().includes(pick.toLowerCase()));
       if (!chosen) {
         await sendTelegram(chatId, "Pick a number from the list, or say cancel.");
         return;
@@ -407,6 +421,19 @@ app.post("/webhook", async (req, res) => {
     } else {
       state.set(chatId, { type: "bf_awaiting" });
       await sendTelegram(chatId, "💌 What do you want to say to Patrick?");
+    }
+    return;
+  }
+
+  // "what's X's agent name" / "what's X's slug"
+  const agentNameMatch = text.match(/what'?s?\s+(\w+)'?s?\s+(agent|slug|masumi)/i);
+  if (agentNameMatch) {
+    const name = agentNameMatch[1].toLowerCase();
+    const slug = resolveNickname(name);
+    if (slug) {
+      await sendTelegram(chatId, `${agentNameMatch[1]}'s agent slug is \`${slug}\``);
+    } else {
+      await sendTelegram(chatId, `I don't have a nickname saved for "${agentNameMatch[1]}". Ask me to add one!`);
     }
     return;
   }
