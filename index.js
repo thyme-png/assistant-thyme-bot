@@ -298,7 +298,7 @@ async function sendMessageToPatrick(chatId, message) {
 
 async function showBfConfirm(chatId, message) {
   state.set(chatId, { type: "bf_confirm", message });
-  await sendTelegram(chatId, `💌 "${message}"\n\nsend / n / edit`);
+  await sendTelegram(chatId, `💌 "${message}"\n\ny / n / e`);
 }
 
 app.post("/webhook", async (req, res) => {
@@ -354,9 +354,9 @@ app.post("/webhook", async (req, res) => {
         await ack(chatId, "✨ Rewriting...");
         const reformatted = await reformatForBf(s.message);
         state.set(chatId, { type: "bf_confirm", message: reformatted });
-        await sendTelegram(chatId, `💌 "${reformatted}"\n\nsend / n / edit`);
+        await sendTelegram(chatId, `💌 "${reformatted}"\n\ny / n / e`);
       } else {
-        await sendTelegram(chatId, "send / n / edit");
+        await sendTelegram(chatId, "y / n / e");
       }
       return;
     }
@@ -393,7 +393,7 @@ app.post("/webhook", async (req, res) => {
 
     if (s.type === "agent_awaiting_message") {
       state.set(chatId, { type: "agent_confirm", slug: s.slug, name: s.name, message: text });
-      await sendTelegram(chatId, `📨 To *${s.name}*: "${text}"\n\nsend / n / edit`);
+      await sendTelegram(chatId, `📨 To *${s.name}*: "${text}"\n\ny / n / e`);
       return;
     }
 
@@ -415,7 +415,7 @@ app.post("/webhook", async (req, res) => {
         state.delete(chatId);
         await sendTelegram(chatId, "❌ Cancelled.");
       } else {
-        await sendTelegram(chatId, "send / n / edit");
+        await sendTelegram(chatId, "y / n / e");
       }
       return;
     }
