@@ -14,12 +14,16 @@ const MASUMI_BACKUP_B64 = process.env.MASUMI_BACKUP_B64;
 const MASUMI_BACKUP_PASSPHRASE = process.env.MASUMI_BACKUP_PASSPHRASE || "assistant-thyme";
 const AGENT_SLUG = process.env.AGENT_SLUG || "thyme-thymestudio-co";
 const BF_SLUG = "patrick-nmkr-io";
+const REDIS_URL = process.env.UPSTASH_REDIS_REST_URL;
+const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
 
-const NICKNAMES = {
+// Base nicknames — extended dynamically via Redis
+const BASE_NICKNAMES = {
   "patrick": "patrick-nmkr-io",
   "bf": "patrick-nmkr-io",
   "boyfriend": "patrick-nmkr-io",
 };
+let NICKNAMES = { ...BASE_NICKNAMES };
 
 const MASUMI_CLI = "masumi-agent-messenger";
 const MASUMI_BACKUP_FILE = "/tmp/masumi-backup.json";
@@ -105,12 +109,57 @@ async function sendTyping(chatId) {
 
 async function ack(chatId, text) {
   await sendTelegram(chatId, text);
-  sendTyping(chatId); // keep typing indicator going
+  sendTyping(chatId);
 }
 
+// --- Redis helpers ---
+async function redisGet(key) {
+  if (!REDIS_URL) return null;
+  try {
+    const res = await fetch(REDIS_URL, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${REDIS_TOKEN}`, "Content-Type": "application/json" },
+      body: JSON.stringify(["GET", key]),
+    });
+    const data = await res.json();
+    return data.result ? JSON.parse(data.result) : null;
+  } catch { return null; }
+}
+
+async function redisSet(key, value) {
+  if (!REDIS_URL) return;
+  try {
+    await fetch(REDIS_URL, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${REDIS_TOKEN}`, "Content-Type": "application/json" },
+      body: JSON.stringify(["SET", key, JSON.stringify(value)]),
+    });
+  } catch {}
+}
+
+async function loadHistory(chatId) {
+  if (histories.has(chatId)) return histories.get(chatId);
+  const saved = await redisGet(`history:${chatId}`);
+  const history = saved ?? [];
+  histories.set(chatId, history);
+  return history;
+}
+
+async function loadNicknames() {
+  const saved = await redisGet("nicknames");
+  if (saved) NICKNAMES = { ...BASE_NICKNAMES, ...saved };
+}
+
+async function saveNicknames() {
+  const custom = Object.fromEntries(
+    Object.entries(NICKNAMES).filter(([k]) => !BASE_NICKNAMES[k])
+  );
+  await redisSet("nicknames", custom);
+}
+// ---------------------
+
 async function askMiMo(chatId, userMessage) {
-  if (!histories.has(chatId)) histories.set(chatId, []);
-  const history = histories.get(chatId);
+  const history = await loadHistory(chatId);
   history.push({ role: "user", content: userMessage });
 
   const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -133,6 +182,8 @@ async function askMiMo(chatId, userMessage) {
   const reply = data.choices?.[0]?.message?.content ?? "Sorry, I couldn't generate a response.";
   history.push({ role: "assistant", content: reply });
   if (history.length > 40) history.splice(0, history.length - 40);
+  histories.set(chatId, history);
+  redisSet(`history:${chatId}`, history); // persist async, don't await
   return reply;
 }
 
@@ -356,6 +407,7 @@ app.post("/webhook", async (req, res) => {
   if (/\bclear\b/i.test(text) && text.length < 20) {
     histories.delete(chatId);
     state.delete(chatId);
+    redisSet(`history:${chatId}`, []);
     await sendTelegram(chatId, "🧹 Conversation cleared.");
     return;
   }
@@ -530,7 +582,8 @@ async function registerWebhook() {
   console.log(`Webhook registered: ${url}`);
 }
 
-restoreMasumiSession().then(() => {
+restoreMasumiSession().then(async () => {
+  await loadNicknames();
   app.listen(PORT, () => {
     console.log(`Bot running on port ${PORT}`);
     registerWebhook().catch(console.error);
