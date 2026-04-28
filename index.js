@@ -537,6 +537,23 @@ app.post("/webhook", async (req, res) => {
     return;
   }
 
+  // "what is the slug" / "what's the agent's slug"
+  if (/what'?s?\s+(the\s+)?(agent'?s?\s+)?slug/i.test(text) || /what is the slug/i.test(text)) {
+    const current = state.get(chatId);
+    // If mid-conversation with a known agent
+    if (current?.slug) {
+      await sendTelegram(chatId, `\`${current.slug}\``);
+      return;
+    }
+    // If asking about bf
+    if (/\b(bf|boyfriend|patrick)\b/i.test(text)) {
+      await sendTelegram(chatId, `\`${BF_SLUG}\``);
+      return;
+    }
+    await sendTelegram(chatId, "Your agent slug is `thyme-thymestudio-co`.");
+    return;
+  }
+
   // "what's X's agent name" / "what's X's slug"
   const agentNameMatch = text.match(/what'?s?\s+(\w+)'?s?\s+(agent|slug|masumi)/i);
   if (agentNameMatch) {
