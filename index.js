@@ -138,6 +138,11 @@ function wantsToMessageBf(text) {
   ) || t === "/bf";
 }
 
+function wantsToSendMessage(text) {
+  const t = text.toLowerCase();
+  return /\b(send|write|compose)\b/.test(t) && /\b(message|msg)\b/.test(t) && !wantsToMessageBf(text);
+}
+
 function wantsToCheckInbox(text) {
   const t = text.toLowerCase();
   return /\b(any|check|got|have|see|show)\b/.test(t) && /\b(message|messages|inbox|mail)\b/.test(t)
@@ -228,6 +233,53 @@ app.post("/webhook", async (req, res) => {
         await sendTelegram(chatId, "❌ Cancelled.");
       } else {
         await sendTelegram(chatId, `Reply *send*, *clean it up*, or *cancel*.`);
+      }
+      return;
+    }
+
+    // Agent picker — waiting for user to pick a number or name
+    if (s.type === "agent_select") {
+      const pick = text.trim();
+      const byNumber = parseInt(pick) - 1;
+      const agents = s.agents;
+      const chosen = !isNaN(byNumber) && agents[byNumber]
+        ? agents[byNumber]
+        : agents.find(a => (a.slug || "").includes(pick.toLowerCase()) || (a.displayName || "").toLowerCase().includes(pick.toLowerCase()));
+      if (!chosen) {
+        await sendTelegram(chatId, "Pick a number from the list, or say cancel.");
+        return;
+      }
+      if (pick.toLowerCase() === "cancel") { state.delete(chatId); await sendTelegram(chatId, "❌ Cancelled."); return; }
+      state.set(chatId, { type: "agent_awaiting_message", slug: chosen.slug, name: chosen.displayName || chosen.slug });
+      await sendTelegram(chatId, `💬 What do you want to say to *${chosen.displayName || chosen.slug}*?`);
+      return;
+    }
+
+    // Waiting for message to a specific agent
+    if (s.type === "agent_awaiting_message") {
+      state.set(chatId, { type: "agent_confirm", slug: s.slug, name: s.name, message: text });
+      await sendTelegram(chatId, `📨 Send this to *${s.name}*?\n\n"${text}"\n\nReply *send* or *cancel*.`);
+      return;
+    }
+
+    // Confirm send to agent
+    if (s.type === "agent_confirm") {
+      const answer = text.toLowerCase().trim();
+      if (answer === "send" || answer === "yes") {
+        state.delete(chatId);
+        await sendTyping(chatId);
+        try {
+          const result = await cli("thread", "start", "--agent", AGENT_SLUG, s.slug, s.message);
+          const threadId = result.data?.threadId;
+          await sendTelegram(chatId, `✅ Sent to *${s.name}*${threadId ? ` (thread #${threadId})` : ""}!`);
+        } catch (err) {
+          await sendTelegram(chatId, `⚠️ Failed to send: ${err.message}`);
+        }
+      } else if (answer === "cancel" || answer === "no") {
+        state.delete(chatId);
+        await sendTelegram(chatId, "❌ Cancelled.");
+      } else {
+        await sendTelegram(chatId, "Reply *send* or *cancel*.");
       }
       return;
     }
@@ -323,6 +375,25 @@ app.post("/webhook", async (req, res) => {
       }
     } catch (err) {
       await sendTelegram(chatId, `⚠️ Could not check inbox: ${err.message}`);
+    }
+    return;
+  }
+
+  // Natural language: send a message (shows agent picker)
+  if (wantsToSendMessage(text)) {
+    await sendTyping(chatId);
+    try {
+      const result = await cli("agents", "list");
+      const agents = result.data?.agents ?? [];
+      if (agents.length === 0) {
+        await sendTelegram(chatId, "No agents found on the network.");
+        return;
+      }
+      state.set(chatId, { type: "agent_select", agents });
+      const lines = agents.slice(0, 20).map((a, i) => `${i + 1}. ${a.displayName || a.name || a.slug}`);
+      await sendTelegram(chatId, `Who do you want to message?\n\n${lines.join("\n")}\n\nPick a number or say cancel.`);
+    } catch (err) {
+      await sendTelegram(chatId, `⚠️ Could not load agents: ${err.message}`);
     }
     return;
   }
