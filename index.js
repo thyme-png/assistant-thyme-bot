@@ -70,7 +70,7 @@ async function buildDirectory() {
   for (const q of ["a", "e", "i", "o", "s", "t", "n", "agent", "io", "bot", "patrick"]) {
     try {
       const result = await cli("discover", "search", q);
-      for (const a of result.data?.agents ?? []) {
+      for (const a of result.data?.results ?? []) {
         if (!seen.has(a.slug)) {
           seen.add(a.slug);
           all.push(a);
