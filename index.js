@@ -352,7 +352,7 @@ async function sendMessageToPatrick(chatId, message) {
       message
     );
     const threadId = result.data?.threadId;
-    await sendTelegram(chatId, `✅ Sent to Patrick${threadId ? ` (thread #${threadId})` : ""}! 💌`);
+    await sendTelegram(chatId, `✅ Delivered to Patrick! 💌`);
   } catch (err) {
     await sendTelegram(chatId, `⚠️ Failed to send: ${err.message}`);
   }
@@ -364,7 +364,7 @@ async function sendAgentMessage(chatId, s) {
   try {
     const result = await cli("thread", "send", "--agent", AGENT_SLUG, s.slug, s.message);
     const threadId = result.data?.threadId;
-    await sendTelegram(chatId, `✅ Sent to *${s.name}*${threadId ? ` (thread #${threadId})` : ""}!`);
+    await sendTelegram(chatId, `✅ Delivered to *${s.name}*!`);
   } catch (err) {
     await sendTelegram(chatId, `⚠️ Failed to send: ${err.message}`);
   }
