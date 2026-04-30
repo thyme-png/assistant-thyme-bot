@@ -839,8 +839,21 @@ async function registerWebhook() {
   console.log(`Webhook registered: ${url}`);
 }
 
+async function pinKnownContacts() {
+  const slugs = [BF_SLUG, ...new Set(Object.values(BASE_NICKNAMES))];
+  for (const slug of [...new Set(slugs)]) {
+    try {
+      await cli("agent", "trust", "pin", slug);
+      console.log(`Pinned trust for ${slug}`);
+    } catch (err) {
+      console.warn(`Could not pin trust for ${slug}:`, err.message);
+    }
+  }
+}
+
 restoreMasumiSession().then(async () => {
   await loadNicknames();
+  pinKnownContacts().catch(console.error);
   loadDirectory().catch(console.error);
   app.listen(PORT, () => {
     console.log(`Bot running on port ${PORT}`);
