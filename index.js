@@ -346,7 +346,7 @@ async function sendMessageToPatrick(chatId, message) {
   state.delete(chatId);
   await ack(chatId, "💌 Sending to Patrick...");
   try {
-    const result = await cli("thread", "start",
+    const result = await cli("thread", "send",
       "--agent", AGENT_SLUG,
       BF_SLUG,
       message
@@ -362,11 +362,22 @@ async function sendAgentMessage(chatId, s) {
   state.delete(chatId);
   await ack(chatId, `📨 Sending to ${s.name}...`);
   try {
-    const result = await cli("thread", "start", "--agent", AGENT_SLUG, s.slug, s.message);
+    const result = await cli("thread", "send", "--agent", AGENT_SLUG, s.slug, s.message);
     const threadId = result.data?.threadId;
     await sendTelegram(chatId, `✅ Sent to *${s.name}*${threadId ? ` (thread #${threadId})` : ""}!`);
   } catch (err) {
     await sendTelegram(chatId, `⚠️ Failed to send: ${err.message}`);
+  }
+}
+
+async function sendThreadReply(chatId, s) {
+  state.delete(chatId);
+  await ack(chatId, `↩️ Sending reply to ${s.sender}...`);
+  try {
+    await cli("thread", "reply", "--agent", AGENT_SLUG, s.threadId, s.message);
+    await sendTelegram(chatId, `✅ Reply sent to *${s.sender}*!`);
+  } catch (err) {
+    await sendTelegram(chatId, `⚠️ Failed to reply: ${err.message}`);
   }
 }
 
@@ -446,6 +457,32 @@ app.post("/webhook", async (req, res) => {
       if (s?.type === "agent_confirm") {
         state.set(chatId, { type: "agent_awaiting_message", slug: s.slug, name: s.name });
         await sendTelegram(chatId, "✏️ Type your edited message:");
+      }
+      return;
+    }
+
+    if (data.startsWith("reply:")) {
+      const [, threadId, sender] = data.split(":");
+      state.set(chatId, { type: "reply_awaiting", threadId, sender: sender || "them" });
+      await sendTelegram(chatId, `↩️ What do you want to reply to *${sender || "them"}*?`);
+      return;
+    }
+
+    if (data === "reply_send") {
+      const s = state.get(chatId);
+      if (s?.type === "reply_confirm") await sendThreadReply(chatId, s);
+      return;
+    }
+    if (data === "reply_cancel") {
+      state.delete(chatId);
+      await sendTelegram(chatId, "❌ Cancelled.");
+      return;
+    }
+    if (data === "reply_edit") {
+      const s = state.get(chatId);
+      if (s?.type === "reply_confirm") {
+        state.set(chatId, { type: "reply_awaiting", threadId: s.threadId, sender: s.sender });
+        await sendTelegram(chatId, "✏️ Type your edited reply:");
       }
       return;
     }
@@ -530,6 +567,29 @@ app.post("/webhook", async (req, res) => {
       await sendTelegram(chatId, `📨 To *${s.name}*:\n\n"${text}"`, [
         [{ text: "✅ Send", callback_data: "msg_send" }, { text: "✏️ Edit", callback_data: "msg_edit" }, { text: "❌ Cancel", callback_data: "msg_cancel" }]
       ]);
+      return;
+    }
+
+    if (s.type === "reply_awaiting") {
+      state.set(chatId, { type: "reply_confirm", threadId: s.threadId, sender: s.sender, message: text });
+      await sendTelegram(chatId, `↩️ Reply to *${s.sender}*:\n\n"${text}"`, [
+        [{ text: "✅ Send", callback_data: "reply_send" }, { text: "✏️ Edit", callback_data: "reply_edit" }, { text: "❌ Cancel", callback_data: "reply_cancel" }]
+      ]);
+      return;
+    }
+
+    if (s.type === "reply_confirm") {
+      if (/^(y|yes|send|yep|yup|ok|okay)$/i.test(answer)) {
+        await sendThreadReply(chatId, s);
+      } else if (/^(edit|e|change|rewrite|fix)$/i.test(answer)) {
+        state.set(chatId, { type: "reply_awaiting", threadId: s.threadId, sender: s.sender });
+        await sendTelegram(chatId, "✏️ Type your edited reply:");
+      } else if (/^(n|no|cancel|nope)$/i.test(answer)) {
+        state.delete(chatId);
+        await sendTelegram(chatId, "❌ Cancelled.");
+      } else {
+        await sendTelegram(chatId, "y / n / e");
+      }
       return;
     }
 
@@ -627,11 +687,13 @@ app.post("/webhook", async (req, res) => {
         await sendTelegram(chatId, `📬 *${messages.length} new message${messages.length > 1 ? "s" : ""}:*`);
         for (const m of messages) {
           const sender = m.sender?.displayName || m.sender?.slug || "Unknown";
-          const threadId = m.threadId ?? m.thread_id;
+          const threadId = String(m.threadId ?? m.thread_id);
+          const senderShort = sender.slice(0, 20);
           await sendTelegram(chatId,
-            `*From:* ${sender}\n*Thread ID:* \`${threadId}\`\n\n${m.text}\n\n↩️ /reply ${threadId} <message>`
+            `*From:* ${sender}\n\n${m.text}`,
+            [[{ text: "↩️ Reply", callback_data: `reply:${threadId}:${senderShort}` }]]
           );
-          await cli("thread", "read", String(threadId), "--agent", AGENT_SLUG).catch(() => {});
+          await cli("thread", "read", threadId, "--agent", AGENT_SLUG).catch(() => {});
         }
       }
     } catch (err) {
