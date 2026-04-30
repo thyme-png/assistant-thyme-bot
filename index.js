@@ -388,7 +388,7 @@ async function sendThreadReply(chatId, s) {
 async function showBfConfirm(chatId, message) {
   state.set(chatId, { type: "bf_confirm", message });
   await sendTelegram(chatId, `💌 "${message}"`, [
-    [{ text: "✅ Send", callback_data: "bf_send" }, { text: "🤖 AI", callback_data: "bf_ai" }, { text: "✏️ Edit", callback_data: "bf_edit" }, { text: "❌ Cancel", callback_data: "bf_cancel" }]
+    [{ text: "✅", callback_data: "bf_send" }, { text: "🤖 AI", callback_data: "bf_ai" }, { text: "✏️ Edit", callback_data: "bf_edit" }, { text: "❌", callback_data: "bf_cancel" }]
   ]);
 }
 
@@ -452,7 +452,7 @@ app.post("/webhook", async (req, res) => {
         const rephrased = await rephraseMessage(s.message, "her boyfriend Patrick");
         state.set(chatId, { type: "bf_confirm", message: rephrased });
         await sendTelegram(chatId, `💌 "${rephrased}"`, [
-          [{ text: "✅ Send", callback_data: "bf_send" }, { text: "🤖 Again", callback_data: "bf_ai" }, { text: "✏️ Edit", callback_data: "bf_edit" }, { text: "❌ Cancel", callback_data: "bf_cancel" }]
+          [{ text: "✅", callback_data: "bf_send" }, { text: "🤖 Again", callback_data: "bf_ai" }, { text: "✏️ Edit", callback_data: "bf_edit" }, { text: "❌", callback_data: "bf_cancel" }]
         ]);
       }
       return;
@@ -483,7 +483,7 @@ app.post("/webhook", async (req, res) => {
         const rephrased = await rephraseMessage(s.message, s.name);
         state.set(chatId, { type: "agent_confirm", slug: s.slug, name: s.name, message: rephrased });
         await sendTelegram(chatId, `📨 To *${s.name}*:\n\n"${rephrased}"`, [
-          [{ text: "✅ Send", callback_data: "msg_send" }, { text: "🤖 Again", callback_data: "msg_ai" }, { text: "✏️ Edit", callback_data: "msg_edit" }, { text: "❌ Cancel", callback_data: "msg_cancel" }]
+          [{ text: "✅", callback_data: "msg_send" }, { text: "🤖 Again", callback_data: "msg_ai" }, { text: "✏️ Edit", callback_data: "msg_edit" }, { text: "❌", callback_data: "msg_cancel" }]
         ]);
       }
       return;
@@ -593,7 +593,7 @@ app.post("/webhook", async (req, res) => {
     if (s.type === "agent_awaiting_message") {
       state.set(chatId, { type: "agent_confirm", slug: s.slug, name: s.name, message: text });
       await sendTelegram(chatId, `📨 To *${s.name}*:\n\n"${text}"`, [
-        [{ text: "✅ Send", callback_data: "msg_send" }, { text: "🤖 AI", callback_data: "msg_ai" }, { text: "✏️ Edit", callback_data: "msg_edit" }, { text: "❌ Cancel", callback_data: "msg_cancel" }]
+        [{ text: "✅", callback_data: "msg_send" }, { text: "🤖 AI", callback_data: "msg_ai" }, { text: "✏️ Edit", callback_data: "msg_edit" }, { text: "❌", callback_data: "msg_cancel" }]
       ]);
       return;
     }
@@ -601,7 +601,7 @@ app.post("/webhook", async (req, res) => {
     if (s.type === "reply_awaiting") {
       state.set(chatId, { type: "reply_confirm", threadId: s.threadId, sender: s.sender, message: text });
       await sendTelegram(chatId, `↩️ Reply to *${s.sender}*:\n\n"${text}"`, [
-        [{ text: "✅ Send", callback_data: "reply_send" }, { text: "✏️ Edit", callback_data: "reply_edit" }, { text: "❌ Cancel", callback_data: "reply_cancel" }]
+        [{ text: "✅", callback_data: "reply_send" }, { text: "✏️ Edit", callback_data: "reply_edit" }, { text: "❌", callback_data: "reply_cancel" }]
       ]);
       return;
     }
@@ -754,7 +754,7 @@ app.post("/webhook", async (req, res) => {
       text: a.displayName || a.name || a.slug,
       callback_data: `agent_select:${a.slug}:${a.displayName || a.name || a.slug}`,
     }]));
-    buttons.push([{ text: "❌ Cancel", callback_data: "agent_select:cancel" }]);
+    buttons.push([{ text: "❌", callback_data: "agent_select:cancel" }]);
     await sendTelegram(chatId, `Who do you want to message? (${all.length} agents)`, buttons);
     return;
   }
