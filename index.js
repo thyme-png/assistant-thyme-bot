@@ -534,8 +534,8 @@ app.post("/webhook", async (req, res) => {
   if (s) {
     const answer = text.toLowerCase().trim();
 
-    // Waiting for the message to send
-    if (s.type === "bf_awaiting") {
+    // Waiting for the message to send (or editing)
+    if (s.type === "bf_awaiting" || s.type === "bf_editing") {
       await showBfConfirm(chatId, text);
       return;
     }
