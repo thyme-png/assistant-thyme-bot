@@ -289,7 +289,7 @@ async function askMiMo(chatId, userMessage) {
   return reply;
 }
 
-async function reformatForBf(raw) {
+async function rephraseMessage(raw, recipientName = "someone") {
   try {
     const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
@@ -302,7 +302,7 @@ async function reformatForBf(raw) {
         messages: [
           {
             role: "system",
-            content: "You are helping someone write a message to their boyfriend Patrick. Rewrite the message to sound natural, warm, and like the sender. Keep the tone casual. Output ONLY the rewritten message — no quotes, no explanation.",
+            content: `You are helping someone write a message to ${recipientName}. Rewrite their message to sound natural, clear, and like the sender. Keep the same tone and intent. Output ONLY the rewritten message — no quotes, no explanation.`,
           },
           { role: "user", content: raw },
         ],
@@ -313,6 +313,10 @@ async function reformatForBf(raw) {
   } catch {
     return raw;
   }
+}
+
+async function reformatForBf(raw) {
+  return rephraseMessage(raw, "her boyfriend Patrick");
 }
 
 function wantsToMessageBf(text) {
@@ -384,7 +388,7 @@ async function sendThreadReply(chatId, s) {
 async function showBfConfirm(chatId, message) {
   state.set(chatId, { type: "bf_confirm", message });
   await sendTelegram(chatId, `💌 "${message}"`, [
-    [{ text: "✅ Send", callback_data: "bf_send" }, { text: "✏️ Edit", callback_data: "bf_edit" }, { text: "❌ Cancel", callback_data: "bf_cancel" }]
+    [{ text: "✅ Send", callback_data: "bf_send" }, { text: "🤖 AI", callback_data: "bf_ai" }, { text: "✏️ Edit", callback_data: "bf_edit" }, { text: "❌ Cancel", callback_data: "bf_cancel" }]
   ]);
 }
 
@@ -441,6 +445,18 @@ app.post("/webhook", async (req, res) => {
       await sendTelegram(chatId, "✏️ Type your edited message:");
       return;
     }
+    if (data === "bf_ai") {
+      const s = state.get(chatId);
+      if (s?.type === "bf_confirm") {
+        await sendTelegram(chatId, "🤖 Rephrasing...");
+        const rephrased = await rephraseMessage(s.message, "her boyfriend Patrick");
+        state.set(chatId, { type: "bf_confirm", message: rephrased });
+        await sendTelegram(chatId, `💌 "${rephrased}"`, [
+          [{ text: "✅ Send", callback_data: "bf_send" }, { text: "🤖 Again", callback_data: "bf_ai" }, { text: "✏️ Edit", callback_data: "bf_edit" }, { text: "❌ Cancel", callback_data: "bf_cancel" }]
+        ]);
+      }
+      return;
+    }
 
     if (data === "msg_send") {
       const s = state.get(chatId);
@@ -457,6 +473,18 @@ app.post("/webhook", async (req, res) => {
       if (s?.type === "agent_confirm") {
         state.set(chatId, { type: "agent_awaiting_message", slug: s.slug, name: s.name });
         await sendTelegram(chatId, "✏️ Type your edited message:");
+      }
+      return;
+    }
+    if (data === "msg_ai") {
+      const s = state.get(chatId);
+      if (s?.type === "agent_confirm") {
+        await sendTelegram(chatId, "🤖 Rephrasing...");
+        const rephrased = await rephraseMessage(s.message, s.name);
+        state.set(chatId, { type: "agent_confirm", slug: s.slug, name: s.name, message: rephrased });
+        await sendTelegram(chatId, `📨 To *${s.name}*:\n\n"${rephrased}"`, [
+          [{ text: "✅ Send", callback_data: "msg_send" }, { text: "🤖 Again", callback_data: "msg_ai" }, { text: "✏️ Edit", callback_data: "msg_edit" }, { text: "❌ Cancel", callback_data: "msg_cancel" }]
+        ]);
       }
       return;
     }
@@ -565,7 +593,7 @@ app.post("/webhook", async (req, res) => {
     if (s.type === "agent_awaiting_message") {
       state.set(chatId, { type: "agent_confirm", slug: s.slug, name: s.name, message: text });
       await sendTelegram(chatId, `📨 To *${s.name}*:\n\n"${text}"`, [
-        [{ text: "✅ Send", callback_data: "msg_send" }, { text: "✏️ Edit", callback_data: "msg_edit" }, { text: "❌ Cancel", callback_data: "msg_cancel" }]
+        [{ text: "✅ Send", callback_data: "msg_send" }, { text: "🤖 AI", callback_data: "msg_ai" }, { text: "✏️ Edit", callback_data: "msg_edit" }, { text: "❌ Cancel", callback_data: "msg_cancel" }]
       ]);
       return;
     }
