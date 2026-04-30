@@ -321,6 +321,7 @@ async function reformatForBf(raw) {
 
 function wantsToMessageBf(text) {
   const t = text.toLowerCase();
+  if (/\b(what|last|recent|show|history|sent|received)\b/.test(t)) return false;
   return (
     /\b(message|msg|send|text|tell|write)\b/.test(t) &&
     /\b(bf|boyfriend|patrick)\b/.test(t)
@@ -350,12 +351,8 @@ async function sendMessageToPatrick(chatId, message) {
   state.delete(chatId);
   await ack(chatId, "💌 Sending to Patrick...");
   try {
-    const result = await cli("thread", "send",
-      "--agent", AGENT_SLUG,
-      BF_SLUG,
-      message
-    );
-    const threadId = result.data?.threadId;
+    await cli("thread", "send", "--agent", AGENT_SLUG, BF_SLUG, message);
+    await redisSet(`last_sent:${BF_SLUG}`, { message, name: "Patrick", at: new Date().toISOString() });
     await sendTelegram(chatId, `✅ Delivered to Patrick! 💌`);
   } catch (err) {
     await sendTelegram(chatId, `⚠️ Failed to send: ${err.message}`);
@@ -366,8 +363,8 @@ async function sendAgentMessage(chatId, s) {
   state.delete(chatId);
   await ack(chatId, `📨 Sending to ${s.name}...`);
   try {
-    const result = await cli("thread", "send", "--agent", AGENT_SLUG, s.slug, s.message);
-    const threadId = result.data?.threadId;
+    await cli("thread", "send", "--agent", AGENT_SLUG, s.slug, s.message);
+    await redisSet(`last_sent:${s.slug}`, { message: s.message, name: s.name, at: new Date().toISOString() });
     await sendTelegram(chatId, `✅ Delivered to *${s.name}*!`);
   } catch (err) {
     await sendTelegram(chatId, `⚠️ Failed to send: ${err.message}`);
@@ -806,6 +803,22 @@ app.post("/webhook", async (req, res) => {
       await sendTelegram(chatId, `${agentNameMatch[1]}'s agent slug is \`${slug}\``);
     } else {
       await sendTelegram(chatId, `I don't have a nickname saved for "${agentNameMatch[1]}". Ask me to add one!`);
+    }
+    return;
+  }
+
+  // Last message recall
+  if (/\b(last|recent)\b.{0,20}\b(message|msg|sent|said)\b/i.test(text) || /what did i (send|say|tell)/i.test(text)) {
+    const slugMatch = text.match(/\b(patrick|bf|boyfriend)\b/i)
+      ? BF_SLUG
+      : (() => { for (const [nick, slug] of Object.entries(NICKNAMES)) { if (text.toLowerCase().includes(nick)) return slug; } return null; })();
+    const slug = slugMatch || BF_SLUG;
+    const last = await redisGet(`last_sent:${slug}`);
+    if (last) {
+      const when = new Date(last.at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+      await sendTelegram(chatId, `Last message to *${last.name}* (${when}):\n\n"${last.message}"`);
+    } else {
+      await sendTelegram(chatId, "No sent messages on record yet.");
     }
     return;
   }
