@@ -179,6 +179,11 @@ async function cli(...args) {
       }
     }
     console.error(`[CLI error] ${err.message}\nstderr: ${err.stderr || ""}\nstdout: ${err.stdout || ""}`);
+    // Translate cryptic protocol/network errors into friendly messages
+    const msg = err.message || "";
+    if (msg.includes("byte(s) at relative offset") || msg.includes("Failed to allocate") || msg.includes("Unable to load") || msg.includes("INBOX_MESSAGES_FAILED")) {
+      throw new Error("Masumi network is temporarily unavailable. Try again in a few minutes.");
+    }
     throw err;
   }
 }
