@@ -101,6 +101,58 @@ async function loadDirectory() {
 
 let sessionReady = false;
 
+async function refreshOidcIfNeeded(secretsPath) {
+  try {
+    const secrets = JSON.parse(require("node:fs").readFileSync(secretsPath, "utf8"));
+    const oidcRaw = secrets.entries?.["default:oidc"];
+    if (!oidcRaw) return;
+    const oidc = JSON.parse(oidcRaw);
+    const expiresAt = new Date(oidc.expiresAt).getTime();
+    const oneHour = 60 * 60 * 1000;
+    if (Date.now() < expiresAt - oneHour) {
+      console.log("OIDC session still valid, no refresh needed.");
+      return;
+    }
+    if (!oidc.refreshToken) { console.log("No refresh token available."); return; }
+    console.log("OIDC session expired or expiring soon — refreshing...");
+    // Try both Masumi token endpoints
+    const endpoints = [
+      "https://app.masumi.network/api/auth/oauth2/token",
+      "https://app.masumi.network/api/auth/device/token",
+    ];
+    for (const endpoint of endpoints) {
+      try {
+        const res = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            grant_type: "refresh_token",
+            refresh_token: oidc.refreshToken,
+            client_id: "masumi-spacetime-cli",
+          }),
+        });
+        if (!res.ok) continue;
+        const data = await res.json();
+        if (!data.access_token) continue;
+        const newOidc = {
+          ...oidc,
+          accessToken: data.access_token,
+          ...(data.id_token ? { idToken: data.id_token } : {}),
+          ...(data.refresh_token ? { refreshToken: data.refresh_token } : {}),
+          expiresAt: new Date(Date.now() + (data.expires_in || 3600) * 1000).toISOString(),
+        };
+        secrets.entries["default:oidc"] = JSON.stringify(newOidc);
+        require("node:fs").writeFileSync(secretsPath, JSON.stringify(secrets, null, 2), { mode: 0o600 });
+        console.log("OIDC session refreshed successfully.");
+        return;
+      } catch {}
+    }
+    console.warn("Could not refresh OIDC session — will try with existing token.");
+  } catch (err) {
+    console.warn("refreshOidcIfNeeded error:", err.message);
+  }
+}
+
 async function restoreMasumiSession() {
   if (MASUMI_BUNDLE_B64) {
     try {
@@ -115,6 +167,7 @@ async function restoreMasumiSession() {
       chmodSync(configPath, 0o600);
       chmodSync(secretsPath, 0o600);
       console.log(`Masumi bundle written to ${cliDir} (${Object.keys(bundle.secrets.entries).length} secrets)`);
+      await refreshOidcIfNeeded(secretsPath);
       sessionReady = true;
       return;
     } catch (err) {
