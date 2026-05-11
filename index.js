@@ -408,12 +408,83 @@ function wantsToCheckInbox(text) {
 async function sendMessageToPatrick(chatId, message) {
   state.delete(chatId);
   await ack(chatId, "💌 Sending to Patrick...");
+
   try {
-    await cli("thread", "send", "--agent", AGENT_SLUG, BF_SLUG, message);
+    // Step 1: Check approval list for pending outgoing contact request to Patrick
+    let pendingRequest = null;
+    let storedThread = await redisGet("bf_thread"); // { threadId, approved }
+
+    try {
+      const approvalResult = await cli("thread", "approval", "list", "--agent", AGENT_SLUG);
+      pendingRequest = (approvalResult.data?.requests ?? []).find(
+        r => r.direction === "outgoing" && r.status === "pending" && r.target?.slug === BF_SLUG
+      );
+      if (pendingRequest && !storedThread?.threadId) {
+        storedThread = { threadId: pendingRequest.threadId, approved: false };
+        await redisSet("bf_thread", storedThread);
+      }
+    } catch {}
+
+    // Step 2: If there's a pending approval, can't send until Patrick approves
+    if (pendingRequest) {
+      await sendTelegram(chatId,
+        "⏳ *Patrick hasn't approved your contact request yet.*\n\n" +
+        "Your first message is waiting for him. Once he approves, messages will go straight through! 💌"
+      );
+      return;
+    }
+
+    // Step 3: If we have a stored thread (may now be approved since no pending request)
+    if (storedThread?.threadId) {
+      try {
+        await cli("thread", "reply", "--agent", AGENT_SLUG, storedThread.threadId, message);
+        await redisSet("bf_thread", { ...storedThread, approved: true });
+        await redisSet(`last_sent:${BF_SLUG}`, { message, name: "Patrick", at: new Date().toISOString() });
+        await sendTelegram(chatId, `✅ Delivered to Patrick! 💌`);
+        return;
+      } catch (err) {
+        if (err.message.includes("pending") || err.message.includes("locked") || err.message.includes("pre-approval")) {
+          // Still locked - Patrick hasn't approved yet
+          await sendTelegram(chatId,
+            "⏳ *Patrick hasn't approved your contact request yet.*\n\n" +
+            "Hang tight — once he approves, your messages will go straight through! 💌"
+          );
+          return;
+        }
+        // Thread is stale — clear it and create a fresh contact request
+        await redisSet("bf_thread", null);
+        storedThread = null;
+      }
+    }
+
+    // Step 4: No stored/active thread — create a new contact request with this message
+    const result = await cli("thread", "send", "--agent", AGENT_SLUG, BF_SLUG, message);
+
+    // Try to extract thread ID from response or approval list
+    let newThreadId = result.data?.threadId || result.data?.thread?.id;
+    if (!newThreadId) {
+      try {
+        const ar = await cli("thread", "approval", "list", "--agent", AGENT_SLUG);
+        const nr = (ar.data?.requests ?? []).find(
+          r => r.direction === "outgoing" && r.status === "pending" && r.target?.slug === BF_SLUG
+        );
+        if (nr?.threadId) newThreadId = nr.threadId;
+      } catch {}
+    }
+    if (newThreadId) await redisSet("bf_thread", { threadId: newThreadId, approved: false });
+
     await redisSet(`last_sent:${BF_SLUG}`, { message, name: "Patrick", at: new Date().toISOString() });
-    await sendTelegram(chatId, `✅ Delivered to Patrick! 💌`);
+    await sendTelegram(chatId,
+      "💌 *Contact request sent to Patrick!*\n\nYour message is included. Once he approves, you can chat freely!"
+    );
   } catch (err) {
-    await sendTelegram(chatId, `⚠️ Failed to send: ${err.message}`);
+    if (err.message.includes("pending contact request already exists")) {
+      await sendTelegram(chatId,
+        "⏳ *Patrick hasn't approved your contact request yet.*\n\nOnce he approves, your messages will go straight through! 💌"
+      );
+    } else {
+      await sendTelegram(chatId, `⚠️ Failed to send: ${err.message}`);
+    }
   }
 }
 
