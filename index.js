@@ -1,7 +1,7 @@
 import express from "express";
 import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
-import { writeFileSync, mkdirSync, chmodSync } from "node:fs";
+import { writeFileSync, readFileSync, mkdirSync, chmodSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -103,7 +103,7 @@ let sessionReady = false;
 
 async function refreshOidcIfNeeded(secretsPath) {
   try {
-    const secrets = JSON.parse(require("node:fs").readFileSync(secretsPath, "utf8"));
+    const secrets = JSON.parse(readFileSync(secretsPath, "utf8"));
     const oidcRaw = secrets.entries?.["default:oidc"];
     if (!oidcRaw) return;
     const oidc = JSON.parse(oidcRaw);
@@ -142,7 +142,7 @@ async function refreshOidcIfNeeded(secretsPath) {
           expiresAt: new Date(Date.now() + (data.expires_in || 3600) * 1000).toISOString(),
         };
         secrets.entries["default:oidc"] = JSON.stringify(newOidc);
-        require("node:fs").writeFileSync(secretsPath, JSON.stringify(secrets, null, 2), { mode: 0o600 });
+        writeFileSync(secretsPath, JSON.stringify(secrets, null, 2), { mode: 0o600 });
         console.log("OIDC session refreshed successfully.");
         return;
       } catch {}
